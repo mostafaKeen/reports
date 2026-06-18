@@ -13,10 +13,11 @@ use Illuminate\Support\Facades\Log;
 /**
  * Enhanced ReportingController with Property Reference Support
  * 
- * Changes from original:
- * - Added propertyReferenceAnalytics() endpoint for detailed property reference data
- * - Enhanced CSV export to include Property Reference breakdown
- * - Added property reference field detection with caching
+ * Features:
+ * - Automatic detection of Listing Reference/Property Reference fields
+ * - Detailed diagnostics endpoint for debugging
+ * - CSV export with property reference breakdown
+ * - Support for both field IDs: UF_CRM_1772139089925 and UF_CRM_1774618391777
  */
 class ReportingController extends Controller
 {
@@ -42,6 +43,83 @@ class ReportingController extends Controller
             'endDate' => $endDate,
             'isBitrix24Context' => $isBitrix24Context,
         ]);
+    }
+
+    /**
+     * Diagnostic endpoint to check field configuration
+     * GET /report/{company}/diagnostics
+     */
+    public function diagnostics(Request $request, Company $company)
+    {
+        try {
+            Log::info('Running diagnostics', ['company_id' => $company->id]);
+
+            $service = new ReportService($company);
+            
+            // Get the listing reference field
+            $listingRefField = $service->getListingReferenceFieldId();
+
+            // Try to fetch a sample lead to verify data is working
+            $sampleLeads = $service->fetchLeads(
+                Carbon::now('Asia/Dubai')->subDays(7)->format('Y-m-d H:i:s'),
+                Carbon::now('Asia/Dubai')->format('Y-m-d H:i:s')
+            );
+
+            $diagnosticData = [
+                'company_id' => $company->id,
+                'company_name' => $company->name,
+                'listing_ref_field_id' => $listingRefField,
+                'sample_leads_count' => count($sampleLeads),
+                'sample_lead_with_ref' => null,
+                'field_values_sample' => [],
+                'status' => 'ok',
+            ];
+
+            // Find a lead with listing reference data if field is found
+            if ($listingRefField && !empty($sampleLeads)) {
+                $fieldValuesFound = [];
+                foreach ($sampleLeads as $lead) {
+                    $refValue = $lead[$listingRefField] ?? null;
+                    if (!empty($refValue)) {
+                        $fieldValuesFound[] = $refValue;
+                        if ($diagnosticData['sample_lead_with_ref'] === null) {
+                            $diagnosticData['sample_lead_with_ref'] = [
+                                'lead_id' => $lead['ID'] ?? null,
+                                'lead_title' => $lead['TITLE'] ?? null,
+                                'field_value' => $refValue,
+                            ];
+                        }
+                    }
+                }
+                $diagnosticData['field_values_sample'] = array_unique(array_slice($fieldValuesFound, 0, 5));
+                $diagnosticData['unique_field_values'] = count(array_unique($fieldValuesFound));
+            } else {
+                $diagnosticData['status'] = 'warning';
+                $diagnosticData['message'] = $listingRefField 
+                    ? 'Field found but no sample leads with values'
+                    : 'Listing Reference field not detected';
+            }
+
+            Log::info('Diagnostics completed', $diagnosticData);
+
+            return response()->json([
+                'success' => true,
+                'data' => $diagnosticData,
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('Diagnostics error', [
+                'company_id' => $company->id,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'error' => $e->getMessage(),
+                'trace' => config('app.debug') ? $e->getTraceAsString() : null,
+            ], 500);
+        }
     }
 
     /**
@@ -86,6 +164,13 @@ class ReportingController extends Controller
                 "report_time:{$company->id}:{$startDate}:{$endDate}" => now(),
             ]);
 
+            Log::info('Report data fetched successfully', [
+                'company_id' => $company->id,
+                'total_leads' => $report['total_leads'] ?? 0,
+                'total_activities' => $report['total_activities'] ?? 0,
+                'listing_refs_count' => count($report['leads_by_listing_ref'] ?? []),
+            ]);
+
             return response()->json([
                 'success' => true,
                 'data' => $report,
@@ -126,7 +211,8 @@ class ReportingController extends Controller
             $analyzer = new PropertyReferenceAnalyzer($company);
 
             // Find the Property Reference field
-            $propertyRefField = $analyzer->findPropertyReferenceField();
+            $propertyRefField = $reportService->getListingReferenceFieldId();
+            
             if (!$propertyRefField) {
                 return response()->json([
                     'success' => false,
@@ -138,18 +224,18 @@ class ReportingController extends Controller
             $leads = $reportService->fetchLeads($startDate, $endDate);
 
             // Get analytics
-            $analytics = $analyzer->getPropertyReferenceAnalytics($leads, $propertyRefField['field_id']);
+            $analytics = $analyzer->getPropertyReferenceAnalytics($leads, $propertyRefField);
 
             Log::info('Property Reference analytics retrieved', [
                 'company_id' => $company->id,
-                'field_id' => $propertyRefField['field_id'],
+                'field_id' => $propertyRefField,
                 'unique_properties' => $analytics['unique_properties'],
                 'total_leads' => $analytics['total_leads'],
             ]);
 
             return response()->json([
                 'success' => true,
-                'field' => $propertyRefField,
+                'field_id' => $propertyRefField,
                 'analytics' => $analytics,
                 'date_range' => [
                     'start' => $request->start_date,
@@ -259,44 +345,54 @@ class ReportingController extends Controller
 
                 // ========== LEADS BY SOURCE ==========
                 fputcsv($file, ['=== LEADS BY SOURCE ===']);
-                fputcsv($file, ['Source', 'Count']);
+                fputcsv($file, ['Source', 'Count', 'Percentage']);
+                $totalLeads = $report['total_leads'] ?? 0;
                 foreach ($report['leads_by_source'] as $source => $count) {
-                    fputcsv($file, [$source, $count]);
+                    $pct = $totalLeads > 0 ? round(($count / $totalLeads) * 100, 1) : 0;
+                    fputcsv($file, [$source, $count, $pct . '%']);
                 }
                 fputcsv($file, []);
 
                 // ========== LEADS BY PROPERTY REFERENCE ==========
                 if (!empty($report['leads_by_listing_ref'])) {
                     fputcsv($file, ['=== LEADS BY PROPERTY REFERENCE ===']);
-                    fputcsv($file, ['Property Reference', 'Lead Count']);
+                    fputcsv($file, ['Property Reference', 'Lead Count', 'Percentage']);
                     
-                    $totalUnique = 0;
+                    $emptyCount = 0;
+                    $uniqueCount = 0;
                     foreach ($report['leads_by_listing_ref'] as $ref => $count) {
-                        fputcsv($file, [$ref, $count]);
-                        if ($ref !== '(Empty)') {
-                            $totalUnique += 1;
+                        $pct = $totalLeads > 0 ? round(($count / $totalLeads) * 100, 1) : 0;
+                        fputcsv($file, [$ref, $count, $pct . '%']);
+                        
+                        if ($ref === '(Empty)') {
+                            $emptyCount = $count;
+                        } else {
+                            $uniqueCount++;
                         }
                     }
                     
                     fputcsv($file, []);
                     fputcsv($file, ['Summary Statistics for Property References']);
-                    fputcsv($file, ['Total Unique Properties', $totalUnique]);
-                    fputcsv($file, ['Properties with Leads', count($report['leads_by_listing_ref']) - (isset($report['leads_by_listing_ref']['(Empty)']) ? 1 : 0)]);
+                    fputcsv($file, ['Total Unique Properties', $uniqueCount]);
+                    fputcsv($file, ['Properties with Leads', count($report['leads_by_listing_ref']) - ($emptyCount > 0 ? 1 : 0)]);
+                    fputcsv($file, ['Leads without Reference', $emptyCount]);
                     fputcsv($file, []);
                 }
 
                 // ========== ACTIVITIES BY TYPE ==========
                 fputcsv($file, ['=== ACTIVITIES BY TYPE ===']);
-                fputcsv($file, ['Activity Type', 'Count']);
+                fputcsv($file, ['Activity Type', 'Count', 'Percentage']);
+                $totalActivities = $report['total_activities'] ?? 0;
                 foreach ($report['activities_by_type'] as $type => $count) {
-                    fputcsv($file, [$type, $count]);
+                    $pct = $totalActivities > 0 ? round(($count / $totalActivities) * 100, 1) : 0;
+                    fputcsv($file, [$type, $count, $pct . '%']);
                 }
                 fputcsv($file, []);
 
                 // ========== USER ANALYTICS ==========
                 if (!empty($report['user_analytics'])) {
                     fputcsv($file, ['=== USER ANALYTICS ===']);
-                    fputcsv($file, ['User', 'Total Leads', 'Total Activities', 'Activities Summary']);
+                    fputcsv($file, ['User', 'Total Leads', 'Total Activities', 'Activity Breakdown']);
                     foreach ($report['user_analytics'] as $user) {
                         $actSummary = [];
                         foreach ($user['activities_by_type'] as $type => $count) {
@@ -313,6 +409,12 @@ class ReportingController extends Controller
 
                 fclose($file);
             };
+
+            Log::info('CSV export started', [
+                'company_id' => $company->id,
+                'start_date' => $request->start_date,
+                'end_date' => $request->end_date,
+            ]);
 
             return Response::stream($callback, 200, $headers);
 

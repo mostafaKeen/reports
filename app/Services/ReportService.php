@@ -19,6 +19,12 @@ class ReportService
     protected const CACHE_TTL_LEADS = 300;              // 5 minutes for leads
     protected const CACHE_TTL_ACTIVITIES = 300;         // 5 minutes for activities
 
+    // Known Listing Reference field IDs in Bitrix24 (for this specific setup)
+    protected const KNOWN_LISTING_REF_FIELDS = [
+        'UF_CRM_1772139089925', // Property Reference
+        'UF_CRM_1774618391777', // Listing Reference
+    ];
+
     public function __construct(Company $company)
     {
         $this->company = $company;
@@ -48,6 +54,7 @@ class ReportService
 
     /**
      * Resolve the "Listing Reference" custom field ID.
+     * Checks both static field IDs and searches through available fields.
      * Cached for 7 days since fields rarely change.
      */
     public function getListingReferenceFieldId(): ?string
@@ -56,22 +63,71 @@ class ReportService
         $cached = $this->cache->get($cacheKey);
 
         if ($cached !== null) {
+            Log::info('Using cached listing ref field', [
+                'company_id' => $this->company->id,
+                'field_id' => $cached
+            ]);
             return $cached;
         }
 
         try {
+            // First, try known field IDs for this setup
             $response = $this->client->call('crm.lead.fields');
             $fields = $response['result'] ?? [];
 
+            Log::debug('Checking known listing reference fields', [
+                'company_id' => $this->company->id,
+                'known_fields' => self::KNOWN_LISTING_REF_FIELDS
+            ]);
+
+            // Check known fields first (they're the fastest)
+            foreach (self::KNOWN_LISTING_REF_FIELDS as $knownFieldId) {
+                if (isset($fields[$knownFieldId])) {
+                    $this->cache->set($cacheKey, $knownFieldId, self::CACHE_TTL_FIELDS);
+                    Log::info('Found listing reference field', [
+                        'company_id' => $this->company->id,
+                        'field_id' => $knownFieldId,
+                        'title' => $fields[$knownFieldId]['title'] ?? 'N/A'
+                    ]);
+                    return $knownFieldId;
+                }
+            }
+
+            // If known fields don't exist, search through all fields
+            Log::debug('Known fields not found, searching through all fields', [
+                'company_id' => $this->company->id,
+                'total_fields' => count($fields)
+            ]);
+
             foreach ($fields as $fieldId => $fieldMeta) {
-                $title = $fieldMeta['title'] ?? $fieldMeta['formLabel'] ?? $fieldMeta['listLabel'] ?? '';
-                if (stripos($title, 'Listing Reference') !== false || stripos($title, 'Property Reference') !== false) {
+                $title = strtolower($fieldMeta['title'] ?? '');
+                $formLabel = strtolower($fieldMeta['formLabel'] ?? '');
+                $listLabel = strtolower($fieldMeta['listLabel'] ?? '');
+
+                // Search for "property reference" or "listing reference"
+                if ((strpos($title, 'property') !== false && strpos($title, 'reference') !== false) ||
+                    (strpos($title, 'listing') !== false && strpos($title, 'reference') !== false) ||
+                    (strpos($formLabel, 'property') !== false && strpos($formLabel, 'reference') !== false) ||
+                    (strpos($formLabel, 'listing') !== false && strpos($formLabel, 'reference') !== false) ||
+                    (strpos($listLabel, 'property') !== false && strpos($listLabel, 'reference') !== false) ||
+                    (strpos($listLabel, 'listing') !== false && strpos($listLabel, 'reference') !== false)) {
+                    
                     $this->cache->set($cacheKey, $fieldId, self::CACHE_TTL_FIELDS);
+                    Log::info('Found listing reference field via search', [
+                        'company_id' => $this->company->id,
+                        'field_id' => $fieldId,
+                        'title' => $fieldMeta['title'] ?? 'N/A',
+                        'form_label' => $fieldMeta['formLabel'] ?? 'N/A',
+                        'list_label' => $fieldMeta['listLabel'] ?? 'N/A'
+                    ]);
                     return $fieldId;
                 }
             }
 
-            Log::warning('Listing Reference field not found', ['company_id' => $this->company->id]);
+            Log::warning('No listing reference field found', [
+                'company_id' => $this->company->id,
+                'searched_fields' => count($fields)
+            ]);
             return null;
 
         } catch (\Exception $e) {
@@ -292,12 +348,24 @@ class ReportService
     public function fetchLeads(string $startDate, string $endDate, array $selectFields = []): array
     {
         $listingRefField = $this->getListingReferenceFieldId();
+        
+        Log::debug('Fetching leads', [
+            'company_id' => $this->company->id,
+            'listing_ref_field' => $listingRefField,
+            'start_date' => $startDate,
+            'end_date' => $endDate
+        ]);
+
         $select = array_merge([
             'ID', 'TITLE', 'DATE_CREATE', 'SOURCE_ID', 'STATUS_ID', 'ASSIGNED_BY_ID',
         ], $selectFields);
 
         if ($listingRefField) {
             $select[] = $listingRefField;
+            Log::info('Added listing reference field to selection', [
+                'company_id' => $this->company->id,
+                'field_id' => $listingRefField
+            ]);
         }
 
         $allLeads = [];
@@ -350,6 +418,7 @@ class ReportService
                     'range_start' => $rangeStart,
                     'range_end' => $rangeEnd,
                     'offset' => $start,
+                    'select_fields' => $select
                 ]);
 
                 $response = $this->client->call('crm.lead.list', [
@@ -363,6 +432,13 @@ class ReportService
                 ]);
 
                 $leads = $response['result'] ?? [];
+                
+                Log::debug('Leads batch received', [
+                    'company_id' => $this->company->id,
+                    'batch_count' => count($leads),
+                    'has_next' => isset($response['next'])
+                ]);
+
                 $allLeads = array_merge($allLeads, $leads);
 
                 $next = $response['next'] ?? null;
@@ -386,12 +462,21 @@ class ReportService
                 $bucket = $dayBuckets[$cacheKey] ?? [];
                 $this->cache->set($cacheKey, $bucket, self::CACHE_TTL_LEADS);
             }
+
+            Log::info('Leads range cached', [
+                'company_id' => $this->company->id,
+                'total_leads' => count($allLeads),
+                'range_start' => $rangeStart,
+                'range_end' => $rangeEnd
+            ]);
+
         } catch (\Exception $e) {
             Log::error('Failed to fetch leads range', [
                 'company_id' => $this->company->id,
                 'range_start' => $rangeStart,
                 'range_end' => $rangeEnd,
                 'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
             ]);
             throw $e;
         }
@@ -591,15 +676,37 @@ class ReportService
             // Process listing references
             $leadsByListingRef = [];
             if ($listingRefField) {
+                Log::info('Processing listing reference data', [
+                    'company_id' => $this->company->id,
+                    'field_id' => $listingRefField,
+                    'total_leads' => $totalLeads
+                ]);
+
                 foreach ($leads as $lead) {
                     $refValue = $lead[$listingRefField] ?? null;
+                    
                     if (!empty($refValue)) {
-                        $leadsByListingRef[$refValue] = ($leadsByListingRef[$refValue] ?? 0) + 1;
+                        $refValue = trim($refValue);
+                        if (!empty($refValue)) {
+                            $leadsByListingRef[$refValue] = ($leadsByListingRef[$refValue] ?? 0) + 1;
+                        } else {
+                            $leadsByListingRef['(Empty)'] = ($leadsByListingRef['(Empty)'] ?? 0) + 1;
+                        }
                     } else {
                         $leadsByListingRef['(Empty)'] = ($leadsByListingRef['(Empty)'] ?? 0) + 1;
                     }
                 }
                 arsort($leadsByListingRef);
+
+                Log::info('Listing references processed', [
+                    'company_id' => $this->company->id,
+                    'unique_references' => count($leadsByListingRef),
+                    'references' => array_keys($leadsByListingRef)
+                ]);
+            } else {
+                Log::warning('Listing reference field not found, skipping listing ref data', [
+                    'company_id' => $this->company->id
+                ]);
             }
 
             // Process activities
@@ -646,6 +753,7 @@ class ReportService
                 'total_leads' => $totalLeads,
                 'total_activities' => $totalActivities,
                 'unique_sources' => count($leadsBySource),
+                'unique_listing_refs' => count($leadsByListingRef),
                 'unique_users' => count($userAnalytics)
             ]);
 
@@ -654,7 +762,8 @@ class ReportService
         } catch (\Exception $e) {
             Log::error("Failed to generate report", [
                 'company_id' => $this->company->id,
-                'error' => $e->getMessage()
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
             ]);
             throw $e;
         }
