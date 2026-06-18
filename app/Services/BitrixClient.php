@@ -10,16 +10,17 @@ use Exception;
 class BitrixClient
 {
     protected Company $company;
-    protected int $maxRetries = 2;
+    protected BitrixRateLimiter $rateLimiter;
+    protected int $maxRetries = 3;
 
     public function __construct(Company $company)
     {
         $this->company = $company;
+        $this->rateLimiter = new BitrixRateLimiter($company);
     }
 
     /**
-     * Call a Bitrix24 REST API method.
-     * Auth token must be passed as query parameter or in request body.
+     * Call a Bitrix24 REST API method with rate limiting.
      */
     public function call(string $method, array $params = [], int $retryCount = 0): array
     {
@@ -29,14 +30,27 @@ class BitrixClient
 
         $this->ensureValidToken();
 
+        // Apply rate limiting delay
+        $delayApplied = $this->rateLimiter->waitIfNeeded();
+        if ($delayApplied > 0) {
+            Log::debug("Rate limiting applied", [
+                'company_id' => $this->company->id,
+                'method' => $method,
+                'delay_ms' => $delayApplied,
+            ]);
+        }
+
         // Build the endpoint
         $endpoint = "https://{$this->company->domain}/rest/{$method}.json";
-
-        // Add auth token to params
         $params['auth'] = $this->company->access_token;
 
         try {
-            // Use asForm() to properly send params as form data
+            Log::debug("Bitrix24 API call", [
+                'company_id' => $this->company->id,
+                'method' => $method,
+                'attempt' => $retryCount + 1,
+            ]);
+
             $response = Http::asForm()->timeout(30)->post($endpoint, $params);
 
             if ($response->failed()) {
@@ -44,23 +58,41 @@ class BitrixClient
                 $body = $response->body();
                 $jsonBody = $response->json();
 
-                Log::error("Bitrix24 API Error", [
-                    'company_id' => $this->company->id,
-                    'method' => $method,
-                    'status' => $statusCode,
-                    'body' => $body,
-                    'json' => $jsonBody,
-                ]);
-
-                // If 401, token expired - refresh and retry
-                if ($statusCode === 401 && $retryCount < $this->maxRetries) {
-                    Log::warning("Got 401 Unauthorized from Bitrix24, refreshing token and retrying", [
+                // Handle rate limiting (429, 503)
+                if (($statusCode === 429 || $statusCode === 503) && $retryCount < $this->maxRetries) {
+                    $this->rateLimiter->registerRateLimitError();
+                    
+                    $backoffDelay = $this->getBackoffDelay($retryCount);
+                    Log::warning("Rate limited by Bitrix24, retrying with backoff", [
                         'company_id' => $this->company->id,
-                        'attempt' => $retryCount + 1
+                        'method' => $method,
+                        'status' => $statusCode,
+                        'retry' => $retryCount + 1,
+                        'backoff_ms' => $backoffDelay,
+                    ]);
+
+                    // Sleep with exponential backoff
+                    usleep($backoffDelay * 1000);
+
+                    return $this->call($method, $params, $retryCount + 1);
+                }
+
+                // Handle 401 (token expired)
+                if ($statusCode === 401 && $retryCount < $this->maxRetries) {
+                    Log::warning("Got 401 Unauthorized, refreshing token and retrying", [
+                        'company_id' => $this->company->id,
+                        'method' => $method,
                     ]);
                     $this->refreshToken();
                     return $this->call($method, $params, $retryCount + 1);
                 }
+
+                Log::error("Bitrix24 API Error", [
+                    'company_id' => $this->company->id,
+                    'method' => $method,
+                    'status' => $statusCode,
+                    'error' => $jsonBody['error_description'] ?? $body,
+                ]);
 
                 throw new Exception("Bitrix24 API call failed (HTTP {$statusCode}): " . ($jsonBody['error_description'] ?? $body));
             }
@@ -70,25 +102,35 @@ class BitrixClient
             // Check for Bitrix24 error in response
             if (isset($responseData['error']) && $responseData['error']) {
                 $errorMsg = $responseData['error_description'] ?? $responseData['error'];
-                
-                Log::warning("Bitrix24 API returned error response", [
-                    'company_id' => $this->company->id,
-                    'method' => $method,
-                    'error' => $responseData['error'],
-                    'error_description' => $errorMsg
-                ]);
 
-                // If NOAUTH, token might be invalid - try refresh once
-                if (stripos($responseData['error'], 'NOAUTH') !== false && $retryCount < $this->maxRetries) {
-                    Log::info("Got NOAUTH error, attempting token refresh", [
-                        'company_id' => $this->company->id
-                    ]);
-                    $this->refreshToken();
+                // If rate limited or NOAUTH, retry with backoff
+                if ((stripos($responseData['error'], 'NOAUTH') !== false || 
+                     stripos($responseData['error'], 'too many requests') !== false) && 
+                    $retryCount < $this->maxRetries) {
+                    
+                    if (stripos($responseData['error'], 'NOAUTH') !== false) {
+                        Log::info("Got NOAUTH, refreshing token", ['company_id' => $this->company->id]);
+                        $this->refreshToken();
+                    } else {
+                        Log::info("Rate limited in response, backing off", ['company_id' => $this->company->id]);
+                        $this->rateLimiter->registerRateLimitError();
+                        $backoffDelay = $this->getBackoffDelay($retryCount);
+                        usleep($backoffDelay * 1000);
+                    }
+
                     return $this->call($method, $params, $retryCount + 1);
                 }
 
                 throw new Exception("Bitrix24 API error: {$errorMsg}");
             }
+
+            // Success - reset backoff
+            $this->rateLimiter->resetBackoff();
+
+            Log::debug("Bitrix24 API call successful", [
+                'company_id' => $this->company->id,
+                'method' => $method,
+            ]);
 
             return $responseData;
 
@@ -97,10 +139,19 @@ class BitrixClient
                 'company_id' => $this->company->id,
                 'method' => $method,
                 'error' => $e->getMessage(),
-                'response' => $e->response?->body()
             ]);
             throw new Exception("Bitrix24 request failed: " . $e->getMessage());
         }
+    }
+
+    /**
+     * Get exponential backoff delay in milliseconds.
+     */
+    protected function getBackoffDelay(int $retryCount): int
+    {
+        // Start with 1 second, double each retry: 1s, 2s, 4s, 8s
+        $baseDelay = 1000;
+        return $baseDelay * pow(2, $retryCount);
     }
 
     /**
@@ -108,7 +159,6 @@ class BitrixClient
      */
     public function ensureValidToken(): void
     {
-        // Check if token needs refresh
         if ($this->company->expires_at && now()->isAfter($this->company->expires_at)) {
             Log::info("Token expired, refreshing", ['company_id' => $this->company->id]);
             $this->refreshToken();
@@ -116,7 +166,7 @@ class BitrixClient
     }
 
     /**
-     * Refresh the OAuth 2.0 access token using refresh_token.
+     * Refresh the OAuth 2.0 access token.
      */
     public function refreshToken(): void
     {
@@ -143,7 +193,7 @@ class BitrixClient
 
             if ($response->failed()) {
                 $error = $response->json();
-                Log::error("Failed to refresh Bitrix24 token", [
+                Log::error("Failed to refresh token", [
                     'company_id' => $this->company->id,
                     'status' => $response->status(),
                     'error' => $error['error'] ?? $response->body()
@@ -154,23 +204,17 @@ class BitrixClient
             $data = $response->json();
 
             if (empty($data['access_token']) || empty($data['refresh_token'])) {
-                Log::error("Invalid token refresh response", [
-                    'company_id' => $this->company->id,
-                    'response_keys' => array_keys($data)
-                ]);
-                throw new Exception("Token refresh response missing access_token or refresh_token");
+                throw new Exception("Token refresh response missing tokens");
             }
 
-            // Update company with new tokens
             $this->company->update([
                 'access_token' => $data['access_token'],
                 'refresh_token' => $data['refresh_token'],
                 'expires_at' => now()->addSeconds((int) ($data['expires_in'] ?? 3600)),
             ]);
 
-            Log::info("Bitrix24 token refreshed successfully", [
+            Log::info("Token refreshed successfully", [
                 'company_id' => $this->company->id,
-                'expires_in' => $data['expires_in'] ?? 3600
             ]);
 
         } catch (\Illuminate\Http\Client\RequestException $e) {
@@ -178,7 +222,7 @@ class BitrixClient
                 'company_id' => $this->company->id,
                 'error' => $e->getMessage()
             ]);
-            throw new Exception("Token refresh request failed: " . $e->getMessage());
+            throw new Exception("Token refresh failed: " . $e->getMessage());
         }
     }
 }
