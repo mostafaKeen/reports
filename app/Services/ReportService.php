@@ -272,8 +272,8 @@ class ReportService
 
                 $response = $this->client->call('crm.lead.list', [
                     'filter' => [
-                        '>=DATE_CREATE' => Carbon::parse($rangeStart, 'Asia/Dubai')->startOfDay()->toIso8601String(),
-                        '<=DATE_CREATE' => Carbon::parse($rangeEnd, 'Asia/Dubai')->endOfDay()->toIso8601String(),
+                        '>=DATE_CREATE' => Carbon::parse($rangeStart, 'Asia/Dubai')->startOfDay()->format('Y-m-d H:i:s'),
+                        '<=DATE_CREATE' => Carbon::parse($rangeEnd, 'Asia/Dubai')->endOfDay()->format('Y-m-d H:i:s'),
                     ],
                     'select' => $select,
                     'order' => ['DATE_CREATE' => 'ASC'],
@@ -378,8 +378,8 @@ class ReportService
 
                 $response = $this->client->call('crm.activity.list', [
                     'filter' => [
-                        '>=CREATED' => Carbon::parse($rangeStart, 'Asia/Dubai')->startOfDay()->toIso8601String(),
-                        '<=CREATED' => Carbon::parse($rangeEnd, 'Asia/Dubai')->endOfDay()->toIso8601String(),
+                        '>=CREATED' => Carbon::parse($rangeStart, 'Asia/Dubai')->startOfDay()->format('Y-m-d H:i:s'),
+                        '<=CREATED' => Carbon::parse($rangeEnd, 'Asia/Dubai')->endOfDay()->format('Y-m-d H:i:s'),
                     ],
                     'select' => [
                         'ID', 'SUBJECT', 'TYPE_ID', 'OWNER_ID', 'OWNER_TYPE_ID',

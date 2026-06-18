@@ -46,8 +46,8 @@ class ReportingController extends Controller
             'force_refresh' => 'sometimes|boolean',
         ]);
 
-        $startDate = Carbon::parse($request->start_date, 'Asia/Dubai')->startOfDay()->toIso8601String();
-        $endDate = Carbon::parse($request->end_date, 'Asia/Dubai')->endOfDay()->toIso8601String();
+        $startDate = Carbon::parse($request->start_date, 'Asia/Dubai')->startOfDay()->format('Y-m-d H:i:s');
+        $endDate = Carbon::parse($request->end_date, 'Asia/Dubai')->endOfDay()->format('Y-m-d H:i:s');
         $forceRefresh = $request->boolean('force_refresh', false);
 
         try {
@@ -129,8 +129,8 @@ class ReportingController extends Controller
             'end_date' => 'required|date|after_or_equal:start_date',
         ]);
 
-        $startDate = Carbon::parse($request->start_date, 'Asia/Dubai')->startOfDay()->toIso8601String();
-        $endDate = Carbon::parse($request->end_date, 'Asia/Dubai')->endOfDay()->toIso8601String();
+        $startDate = Carbon::parse($request->start_date, 'Asia/Dubai')->startOfDay()->format('Y-m-d H:i:s');
+        $endDate = Carbon::parse($request->end_date, 'Asia/Dubai')->endOfDay()->format('Y-m-d H:i:s');
 
         try {
             // Try to get report from session first for this exact date range
