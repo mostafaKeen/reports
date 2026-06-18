@@ -144,7 +144,7 @@ class ReportService
 
         $cacheKey = 'user_names';
         $cached = $this->cache->get($cacheKey) ?? [];
-        $cachedIds = array_keys($cached);
+        $cachedIds = array_map('strval', array_keys($cached));
         $missingIds = array_values(array_diff($userIds, $cachedIds));
 
         if (!empty($missingIds)) {
@@ -182,8 +182,9 @@ class ReportService
         foreach ($chunks as $chunk) {
             $start = 0;
             do {
+                $idFilter = implode('|', $chunk);
                 $response = $this->client->call('user.get', [
-                    'filter' => ['ID' => $chunk],
+                    'filter' => ['ID' => $idFilter],
                     'select' => ['ID', 'NAME', 'LAST_NAME', 'EMAIL'],
                     'order' => ['ID' => 'ASC'],
                     'start' => $start,
@@ -201,6 +202,28 @@ class ReportService
 
                 $start = $response['next'] ?? null;
             } while ($start !== null);
+
+            // If Bitrix returned no users for this chunk, try one by one as a fallback.
+            if (empty($response['result'])) {
+                foreach ($chunk as $singleId) {
+                    $singleResponse = $this->client->call('user.get', [
+                        'filter' => ['ID' => (string) $singleId],
+                        'select' => ['ID', 'NAME', 'LAST_NAME', 'EMAIL'],
+                        'order' => ['ID' => 'ASC'],
+                        'start' => 0,
+                    ]);
+
+                    foreach (($singleResponse['result'] ?? []) as $user) {
+                        $id = (string) ($user['ID'] ?? null);
+                        if (!$id) {
+                            continue;
+                        }
+
+                        $fullName = trim(($user['NAME'] ?? '') . ' ' . ($user['LAST_NAME'] ?? '')) ?: ($user['EMAIL'] ?? "User #{$id}");
+                        $userMap[$id] = $fullName;
+                    }
+                }
+            }
         }
 
         return $userMap;
