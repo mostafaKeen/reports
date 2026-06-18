@@ -4,11 +4,21 @@ namespace App\Http\Controllers;
 
 use App\Models\Company;
 use App\Services\ReportService;
+use App\Services\PropertyReferenceAnalyzer;
 use Illuminate\Http\Request;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Response;
+use Illuminate\Support\Facades\Log;
 
-class ReportingController extends Controller
+/**
+ * Enhanced ReportingController with Property Reference Support
+ * 
+ * Changes from original:
+ * - Added propertyReferenceAnalytics() endpoint for detailed property reference data
+ * - Enhanced CSV export to include Property Reference breakdown
+ * - Added property reference field detection with caching
+ */
+class ReportingControllerEnhanced extends Controller
 {
     /**
      * Show the report page.
@@ -82,10 +92,75 @@ class ReportingController extends Controller
                 'progress_updates' => $progressUpdates,
             ]);
         } catch (\Exception $e) {
-            \Illuminate\Support\Facades\Log::error('Report fetch error', [
+            Log::error('Report fetch error', [
                 'company_id' => $company->id,
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString()
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'error' => $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
+     * Get detailed Property Reference analytics
+     * Returns unique property references and lead counts with percentages
+     * 
+     * AJAX endpoint: GET /report/{company}/property-references
+     */
+    public function propertyReferenceAnalytics(Request $request, Company $company)
+    {
+        $request->validate([
+            'start_date' => 'required|date',
+            'end_date' => 'required|date|after_or_equal:start_date',
+        ]);
+
+        $startDate = Carbon::parse($request->start_date, 'Asia/Dubai')->startOfDay()->format('Y-m-d H:i:s');
+        $endDate = Carbon::parse($request->end_date, 'Asia/Dubai')->endOfDay()->format('Y-m-d H:i:s');
+
+        try {
+            $reportService = new ReportService($company);
+            $analyzer = new PropertyReferenceAnalyzer($company);
+
+            // Find the Property Reference field
+            $propertyRefField = $analyzer->findPropertyReferenceField();
+            if (!$propertyRefField) {
+                return response()->json([
+                    'success' => false,
+                    'error' => 'Property Reference field not found in this Bitrix24 instance',
+                ], 404);
+            }
+
+            // Fetch leads
+            $leads = $reportService->fetchLeads($startDate, $endDate);
+
+            // Get analytics
+            $analytics = $analyzer->getPropertyReferenceAnalytics($leads, $propertyRefField['field_id']);
+
+            Log::info('Property Reference analytics retrieved', [
+                'company_id' => $company->id,
+                'field_id' => $propertyRefField['field_id'],
+                'unique_properties' => $analytics['unique_properties'],
+                'total_leads' => $analytics['total_leads'],
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'field' => $propertyRefField,
+                'analytics' => $analytics,
+                'date_range' => [
+                    'start' => $request->start_date,
+                    'end' => $request->end_date,
+                ],
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('Property Reference analytics error', [
+                'company_id' => $company->id,
+                'error' => $e->getMessage(),
             ]);
 
             return response()->json([
@@ -104,6 +179,10 @@ class ReportingController extends Controller
             $service = new ReportService($company);
             $service->clearCache();
 
+            // Also clear property reference field cache
+            $analyzer = new PropertyReferenceAnalyzer($company);
+            $analyzer->clearFieldCache();
+
             if ($request->wantsJson()) {
                 return response()->json(['success' => true, 'message' => 'Cache cleared successfully.']);
             }
@@ -120,6 +199,7 @@ class ReportingController extends Controller
 
     /**
      * Export the report as CSV.
+     * Enhanced with Property Reference breakdown.
      * Uses cached data from session if available, otherwise fetches fresh.
      */
     public function exportCsv(Request $request, Company $company)
@@ -166,10 +246,10 @@ class ReportingController extends Controller
                 'Content-Disposition' => "attachment; filename=\"{$filename}\"",
             ];
 
-            $callback = function () use ($report) {
+            $callback = function () use ($report, $company) {
                 $file = fopen('php://output', 'w');
 
-                // Summary Section
+                // ========== REPORT SUMMARY ==========
                 fputcsv($file, ['=== REPORT SUMMARY ===']);
                 fputcsv($file, ['Generated At', $report['generated_at']]);
                 fputcsv($file, ['Period', $report['start_date'] . ' to ' . $report['end_date']]);
@@ -177,7 +257,7 @@ class ReportingController extends Controller
                 fputcsv($file, ['Total Activities', $report['total_activities']]);
                 fputcsv($file, []);
 
-                // Leads by Source
+                // ========== LEADS BY SOURCE ==========
                 fputcsv($file, ['=== LEADS BY SOURCE ===']);
                 fputcsv($file, ['Source', 'Count']);
                 foreach ($report['leads_by_source'] as $source => $count) {
@@ -185,17 +265,27 @@ class ReportingController extends Controller
                 }
                 fputcsv($file, []);
 
-                // Leads by Listing Reference
+                // ========== LEADS BY PROPERTY REFERENCE ==========
                 if (!empty($report['leads_by_listing_ref'])) {
-                    fputcsv($file, ['=== LEADS BY LISTING REFERENCE ===']);
-                    fputcsv($file, ['Reference', 'Count']);
+                    fputcsv($file, ['=== LEADS BY PROPERTY REFERENCE ===']);
+                    fputcsv($file, ['Property Reference', 'Lead Count']);
+                    
+                    $totalUnique = 0;
                     foreach ($report['leads_by_listing_ref'] as $ref => $count) {
                         fputcsv($file, [$ref, $count]);
+                        if ($ref !== '(Empty)') {
+                            $totalUnique += 1;
+                        }
                     }
+                    
+                    fputcsv($file, []);
+                    fputcsv($file, ['Summary Statistics for Property References']);
+                    fputcsv($file, ['Total Unique Properties', $totalUnique]);
+                    fputcsv($file, ['Properties with Leads', count($report['leads_by_listing_ref']) - (isset($report['leads_by_listing_ref']['(Empty)']) ? 1 : 0)]);
                     fputcsv($file, []);
                 }
 
-                // Activities by Type
+                // ========== ACTIVITIES BY TYPE ==========
                 fputcsv($file, ['=== ACTIVITIES BY TYPE ===']);
                 fputcsv($file, ['Activity Type', 'Count']);
                 foreach ($report['activities_by_type'] as $type => $count) {
@@ -203,10 +293,10 @@ class ReportingController extends Controller
                 }
                 fputcsv($file, []);
 
-                // User Analytics
+                // ========== USER ANALYTICS ==========
                 if (!empty($report['user_analytics'])) {
                     fputcsv($file, ['=== USER ANALYTICS ===']);
-                    fputcsv($file, ['User ID', 'Total Leads', 'Total Activities', 'Activities Summary']);
+                    fputcsv($file, ['User', 'Total Leads', 'Total Activities', 'Activities Summary']);
                     foreach ($report['user_analytics'] as $user) {
                         $actSummary = [];
                         foreach ($user['activities_by_type'] as $type => $count) {
@@ -225,7 +315,12 @@ class ReportingController extends Controller
             };
 
             return Response::stream($callback, 200, $headers);
+
         } catch (\Exception $e) {
+            Log::error('CSV export error', [
+                'company_id' => $company->id,
+                'error' => $e->getMessage(),
+            ]);
             return back()->with('error', 'Failed to export: ' . $e->getMessage());
         }
     }
