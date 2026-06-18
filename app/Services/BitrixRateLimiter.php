@@ -8,9 +8,10 @@ use Illuminate\Support\Facades\Log;
 class BitrixRateLimiter
 {
     protected $company;
-    protected $minDelayMs = 500;      // Minimum 500ms between requests
-    protected $maxDelayMs = 5000;     // Maximum 5 seconds
-    protected $backoffMultiplier = 2; // Exponential backoff
+    protected $defaultDelayMs = 500;      // Default 2 requests per second
+    protected $initialBackoffMs = 1000;   // First rate limit backoff is 1 second
+    protected $maxBackoffMs = 8000;       // Maximum backoff of 8 seconds
+    protected $backoffMultiplier = 2;     // Exponential backoff multiplier
 
     public function __construct($company)
     {
@@ -64,10 +65,10 @@ class BitrixRateLimiter
         $backoffKey = $this->getBackoffKey();
         $currentBackoff = Cache::get($backoffKey, 0);
         
-        // Increase backoff exponentially, capped at maxDelayMs
+        // Increase backoff exponentially, starting at 1 second and capping at 8 seconds
         $newBackoff = min(
-            $this->maxDelayMs,
-            $currentBackoff === 0 ? $this->minDelayMs : (int)($currentBackoff * $this->backoffMultiplier)
+            $this->maxBackoffMs,
+            $currentBackoff === 0 ? $this->initialBackoffMs : (int)($currentBackoff * $this->backoffMultiplier)
         );
 
         Cache::put($backoffKey, $newBackoff, 300); // Store for 5 minutes
@@ -100,7 +101,7 @@ class BitrixRateLimiter
         $backoffKey = $this->getBackoffKey();
         $backoff = Cache::get($backoffKey, 0);
         
-        return max($this->minDelayMs, $backoff);
+        return $backoff > 0 ? max($this->defaultDelayMs, $backoff) : $this->defaultDelayMs;
     }
 
     /**

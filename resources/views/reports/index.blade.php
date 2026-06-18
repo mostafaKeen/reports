@@ -116,9 +116,16 @@
 
         <!-- ═══════════════════ LOADING STATE ═══════════════════ -->
         <div id="loading-state" class="hidden">
-            <div class="flex flex-col items-center justify-center py-24">
+            <div class="flex flex-col items-center justify-center py-24 px-4">
                 <div class="spinner mb-4"></div>
-                <p class="text-slate-400 text-sm">Fetching data from Bitrix24...</p>
+                <p class="text-slate-400 text-sm mb-4" id="loading-text">Preparing request...</p>
+                <div class="w-full max-w-md bg-slate-900 rounded-full overflow-hidden border border-slate-800">
+                    <div id="loading-progress-bar" class="h-2 bg-emerald-400 transition-all duration-300" style="width:0%"></div>
+                </div>
+                <div class="w-full max-w-md flex justify-between text-xs text-slate-500 mt-2">
+                    <span id="loading-stage">Waiting</span>
+                    <span id="loading-percent">0%</span>
+                </div>
             </div>
         </div>
 
@@ -301,17 +308,23 @@
             }
 
             showState('loading');
+            updateProgress(5, 'Starting request');
 
             try {
                 const res = await fetch(`/report/${currentCompanyId}/data?start_date=${startDate}&end_date=${endDate}`);
+                updateProgress(35, 'Request sent');
+
                 const json = await res.json();
+                updateProgress(70, 'Processing response');
 
                 if (!json.success) {
                     throw new Error(json.error || 'Unknown error occurred');
                 }
 
                 lastReportData = json.data;
+                updateProgress(90, 'Rendering report');
                 renderReport(json.data);
+                updateProgress(100, 'Done');
                 showState('content');
                 document.getElementById('btn-export').disabled = false;
             } catch (err) {
@@ -319,6 +332,14 @@
                 document.getElementById('error-message').textContent = err.message || 'Failed to fetch report data. Please try again.';
                 showState('error');
             }
+        }
+
+        function updateProgress(percent, stage) {
+            const clamped = Math.min(100, Math.max(0, percent));
+            document.getElementById('loading-progress-bar').style.width = `${clamped}%`;
+            document.getElementById('loading-percent').textContent = `${clamped}%`;
+            document.getElementById('loading-stage').textContent = stage;
+            document.getElementById('loading-text').textContent = `${stage}...`;
         }
 
         // Clear cache

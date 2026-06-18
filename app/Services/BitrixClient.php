@@ -59,7 +59,7 @@ class BitrixClient
                 $jsonBody = $response->json();
 
                 // Handle rate limiting (429, 503)
-                if (($statusCode === 429 || $statusCode === 503) && $retryCount < $this->maxRetries) {
+                if (($statusCode === 429 || $statusCode === 503 || $this->isRateLimitError($statusCode, $jsonBody)) && $retryCount < $this->maxRetries) {
                     $this->rateLimiter->registerRateLimitError();
                     
                     $backoffDelay = $this->getBackoffDelay($retryCount);
@@ -103,22 +103,20 @@ class BitrixClient
             if (isset($responseData['error']) && $responseData['error']) {
                 $errorMsg = $responseData['error_description'] ?? $responseData['error'];
 
-                // If rate limited or NOAUTH, retry with backoff
-                if ((stripos($responseData['error'], 'NOAUTH') !== false || 
-                     stripos($responseData['error'], 'too many requests') !== false) && 
-                    $retryCount < $this->maxRetries) {
-                    
-                    if (stripos($responseData['error'], 'NOAUTH') !== false) {
+                if ($retryCount < $this->maxRetries) {
+                    if ($this->isNoAuthError($responseData)) {
                         Log::info("Got NOAUTH, refreshing token", ['company_id' => $this->company->id]);
                         $this->refreshToken();
-                    } else {
+                        return $this->call($method, $params, $retryCount + 1);
+                    }
+
+                    if ($this->isRateLimitError($response->status(), $responseData)) {
                         Log::info("Rate limited in response, backing off", ['company_id' => $this->company->id]);
                         $this->rateLimiter->registerRateLimitError();
                         $backoffDelay = $this->getBackoffDelay($retryCount);
                         usleep($backoffDelay * 1000);
+                        return $this->call($method, $params, $retryCount + 1);
                     }
-
-                    return $this->call($method, $params, $retryCount + 1);
                 }
 
                 throw new Exception("Bitrix24 API error: {$errorMsg}");
@@ -142,6 +140,32 @@ class BitrixClient
             ]);
             throw new Exception("Bitrix24 request failed: " . $e->getMessage());
         }
+    }
+
+    /**
+     * Determine whether a Bitrix24 response should be treated as a rate limit.
+     */
+    protected function isRateLimitError(int $statusCode, array $responseData = []): bool
+    {
+        if (in_array($statusCode, [429, 503], true)) {
+            return true;
+        }
+
+        $error = strtolower($responseData['error'] ?? '');
+        $description = strtolower($responseData['error_description'] ?? '');
+
+        return str_contains($error, 'query_limit_exceeded')
+            || str_contains($error, 'too many requests')
+            || str_contains($description, 'too many requests')
+            || str_contains($description, 'query_limit_exceeded');
+    }
+
+    protected function isNoAuthError(array $responseData = []): bool
+    {
+        $error = strtolower($responseData['error'] ?? '');
+        $description = strtolower($responseData['error_description'] ?? '');
+
+        return str_contains($error, 'noauth') || str_contains($description, 'noauth');
     }
 
     /**
