@@ -36,24 +36,50 @@ class ReportingController extends Controller
 
     /**
      * Fetch report data (AJAX endpoint).
+     * Emits progress updates as JSON chunks.
      */
     public function fetchData(Request $request, Company $company)
     {
         $request->validate([
             'start_date' => 'required|date',
             'end_date' => 'required|date|after_or_equal:start_date',
+            'force_refresh' => 'sometimes|boolean',
         ]);
 
         $startDate = Carbon::parse($request->start_date, 'Asia/Dubai')->startOfDay()->toIso8601String();
         $endDate = Carbon::parse($request->end_date, 'Asia/Dubai')->endOfDay()->toIso8601String();
+        $forceRefresh = $request->boolean('force_refresh', false);
 
         try {
             $service = new ReportService($company);
+
+            // Clear cache if user requested fresh data
+            if ($forceRefresh) {
+                $service->clearCache();
+            }
+
+            // Set up progress tracking
+            $progressUpdates = [];
+            $service->setProgressCallback(function ($percent, $stage) use (&$progressUpdates) {
+                $progressUpdates[] = [
+                    'progress' => $percent,
+                    'stage' => $stage,
+                ];
+            });
+
+            // Generate report
             $report = $service->aggregateReport($startDate, $endDate);
+
+            // Store in session for CSV export
+            session([
+                "report:{$company->id}" => $report,
+                "report_time:{$company->id}" => now(),
+            ]);
 
             return response()->json([
                 'success' => true,
                 'data' => $report,
+                'progress_updates' => $progressUpdates,
             ]);
         } catch (\Exception $e) {
             \Illuminate\Support\Facades\Log::error('Report fetch error', [
@@ -94,6 +120,7 @@ class ReportingController extends Controller
 
     /**
      * Export the report as CSV.
+     * Uses cached data from session if available, otherwise fetches fresh.
      */
     public function exportCsv(Request $request, Company $company)
     {
@@ -106,8 +133,14 @@ class ReportingController extends Controller
         $endDate = Carbon::parse($request->end_date, 'Asia/Dubai')->endOfDay()->toIso8601String();
 
         try {
-            $service = new ReportService($company);
-            $report = $service->aggregateReport($startDate, $endDate);
+            // Try to get report from session first
+            $report = session("report:{$company->id}");
+
+            if (!$report) {
+                // If not in session, generate fresh
+                $service = new ReportService($company);
+                $report = $service->aggregateReport($startDate, $endDate);
+            }
 
             $filename = "{$company->name}_report_{$request->start_date}_to_{$request->end_date}.csv";
 
@@ -150,6 +183,25 @@ class ReportingController extends Controller
                 fputcsv($file, ['Activity Type', 'Count']);
                 foreach ($report['activities_by_type'] as $type => $count) {
                     fputcsv($file, [$type, $count]);
+                }
+                fputcsv($file, []);
+
+                // User Analytics
+                if (!empty($report['user_analytics'])) {
+                    fputcsv($file, ['=== USER ANALYTICS ===']);
+                    fputcsv($file, ['User ID', 'Total Leads', 'Total Activities', 'Activities Summary']);
+                    foreach ($report['user_analytics'] as $user) {
+                        $actSummary = [];
+                        foreach ($user['activities_by_type'] as $type => $count) {
+                            $actSummary[] = "{$type}: {$count}";
+                        }
+                        fputcsv($file, [
+                            $user['user_id'],
+                            $user['total_leads'],
+                            $user['total_activities'],
+                            implode('; ', $actSummary),
+                        ]);
+                    }
                 }
 
                 fclose($file);

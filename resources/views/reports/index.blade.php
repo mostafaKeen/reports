@@ -95,15 +95,15 @@
 
                 <!-- Action buttons -->
                 <div class="flex gap-2">
-                    <button id="btn-generate" onclick="fetchReport()"
+                    <button id="btn-generate" onclick="fetchReport(false)"
                         class="bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white font-semibold rounded-xl px-5 py-2.5 text-sm transition-all shadow-lg shadow-indigo-500/15 flex items-center gap-2">
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
                         Generate
                     </button>
-                    <button id="btn-clear-cache" onclick="clearCache()"
-                        class="bg-slate-900 border border-slate-800 hover:border-amber-500/30 text-amber-400 hover:text-amber-300 font-semibold rounded-xl px-4 py-2.5 text-sm transition-all flex items-center gap-2">
+                    <button id="btn-refresh-data" onclick="fetchReport(true)"
+                        class="bg-slate-900 border border-slate-800 hover:border-cyan-500/30 text-cyan-400 hover:text-cyan-300 font-semibold rounded-xl px-4 py-2.5 text-sm transition-all flex items-center gap-2">
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
-                        Refresh
+                        Refresh Data
                     </button>
                     <button id="btn-export" onclick="exportCsv()" disabled
                         class="bg-slate-900 border border-slate-800 hover:border-emerald-500/30 text-emerald-400 hover:text-emerald-300 font-semibold rounded-xl px-4 py-2.5 text-sm transition-all flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed">
@@ -260,6 +260,15 @@
                     </table>
                 </div>
             </div>
+
+            <!-- User Analytics Section -->
+            <div class="glass rounded-2xl p-6" id="users-section">
+                <h3 class="text-sm font-bold text-slate-300 uppercase tracking-wider mb-4 flex items-center gap-2">
+                    <span class="w-2 h-2 rounded-full bg-sky-500"></span>
+                    Team Performance & User Analytics
+                </h3>
+                <div class="space-y-4" id="users-analytics-container"></div>
+            </div>
         </div>
     </div>
 
@@ -298,7 +307,7 @@
         }
 
         // Fetch report data via AJAX
-        async function fetchReport() {
+        async function fetchReport(forceRefresh = false) {
             const startDate = document.getElementById('start-date').value;
             const endDate = document.getElementById('end-date').value;
 
@@ -311,7 +320,13 @@
             updateProgress(5, 'Starting request');
 
             try {
-                const res = await fetch(`/report/${currentCompanyId}/data?start_date=${startDate}&end_date=${endDate}`);
+                const params = new URLSearchParams({
+                    start_date: startDate,
+                    end_date: endDate,
+                    force_refresh: forceRefresh ? '1' : '0'
+                });
+
+                const res = await fetch(`/report/${currentCompanyId}/data?${params}`);
                 updateProgress(35, 'Request sent');
 
                 const json = await res.json();
@@ -322,6 +337,12 @@
                 }
 
                 lastReportData = json.data;
+                
+                // Store in localStorage with timestamp
+                const cacheKey = `report:${currentCompanyId}:${startDate}:${endDate}`;
+                localStorage.setItem(cacheKey, JSON.stringify(json.data));
+                localStorage.setItem(`${cacheKey}:timestamp`, new Date().getTime());
+
                 updateProgress(90, 'Rendering report');
                 renderReport(json.data);
                 updateProgress(100, 'Done');
@@ -414,6 +435,14 @@
                 renderTable('listing-ref-tbody', data.leads_by_listing_ref, data.total_leads);
             } else {
                 document.getElementById('listing-ref-section').classList.add('hidden');
+            }
+
+            // User Analytics
+            if (data.user_analytics && data.user_analytics.length > 0) {
+                document.getElementById('users-section').classList.remove('hidden');
+                renderUserAnalytics(data.user_analytics, data.total_activities);
+            } else {
+                document.getElementById('users-section').classList.add('hidden');
             }
         }
 
@@ -554,6 +583,57 @@
             });
         }
 
+        // Render user analytics cards
+        function renderUserAnalytics(users, totalActivities) {
+            const container = document.getElementById('users-analytics-container');
+            container.innerHTML = '';
+
+            users.forEach((user, index) => {
+                const actPct = totalActivities > 0 ? ((user.total_activities / totalActivities) * 100).toFixed(1) : '0.0';
+                const actBarWidth = totalActivities > 0 ? Math.max(4, (user.total_activities / totalActivities) * 100) : 0;
+                const colorIdx = index % CHART_COLORS.length;
+
+                // Build activity type summary
+                let actTypeSummary = '';
+                if (Object.keys(user.activities_by_type).length > 0) {
+                    const types = Object.entries(user.activities_by_type)
+                        .map(([type, count]) => `<span class="text-xs bg-slate-800/60 px-2 py-1 rounded">${type}: <strong>${count}</strong></span>`)
+                        .join(' ');
+                    actTypeSummary = `<div class="flex flex-wrap gap-1 mt-3">${types}</div>`;
+                }
+
+                const card = `
+                    <div class="border border-slate-800/60 rounded-xl p-4 bg-slate-900/40 hover:bg-slate-900/60 transition-colors">
+                        <div class="flex items-start justify-between mb-3">
+                            <div class="flex items-center gap-2">
+                                <div class="w-3 h-3 rounded-full" style="background:${CHART_COLORS[colorIdx]}"></div>
+                                <div>
+                                    <p class="font-semibold text-slate-200">User #${escapeHtml(user.user_id)}</p>
+                                    <p class="text-xs text-slate-500">Total Activities: <strong class="text-slate-300">${user.total_activities}</strong></p>
+                                </div>
+                            </div>
+                            <div class="text-right">
+                                <p class="text-sm font-bold text-emerald-400">${user.total_leads}</p>
+                                <p class="text-xs text-slate-500">Leads</p>
+                            </div>
+                        </div>
+                        <div class="space-y-2">
+                            <div class="text-xs text-slate-400 flex justify-between">
+                                <span>Activity Contribution</span>
+                                <span>${actPct}%</span>
+                            </div>
+                            <div class="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                                <div class="h-full rounded-full" style="width:${actBarWidth}%;background:${CHART_COLORS[colorIdx]}"></div>
+                            </div>
+                        </div>
+                        ${actTypeSummary}
+                    </div>
+                `;
+
+                container.innerHTML += card;
+            });
+        }
+
         function escapeHtml(str) {
             const div = document.createElement('div');
             div.textContent = str;
@@ -564,7 +644,7 @@
         document.addEventListener('DOMContentLoaded', function() {
             if (IS_BITRIX_CONTEXT) {
                 // Small delay to ensure Bitrix24 SDK is ready
-                setTimeout(fetchReport, 500);
+                setTimeout(() => fetchReport(false), 500);
             }
         });
     </script>

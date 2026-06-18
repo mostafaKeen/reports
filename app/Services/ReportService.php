@@ -11,6 +11,7 @@ class ReportService
     protected BitrixClient $client;
     protected CompanyCacheService $cache;
     protected Company $company;
+    protected $progressCallback = null;
 
     // Cache TTLs
     protected const CACHE_TTL_FIELDS = 86400 * 7;      // 7 days for field definitions
@@ -23,6 +24,26 @@ class ReportService
         $this->company = $company;
         $this->client = new BitrixClient($company);
         $this->cache = new CompanyCacheService($company);
+    }
+
+    /**
+     * Set a progress callback for real-time updates.
+     * Callback receives (percentage: int, stage: string)
+     */
+    public function setProgressCallback(callable $callback): self
+    {
+        $this->progressCallback = $callback;
+        return $this;
+    }
+
+    /**
+     * Report progress to the callback.
+     */
+    protected function reportProgress(int $percent, string $stage): void
+    {
+        if ($this->progressCallback) {
+            call_user_func($this->progressCallback, $percent, $stage);
+        }
     }
 
     /**
@@ -257,9 +278,16 @@ class ReportService
 
         try {
             // Fetch all data (with caching)
+            $this->reportProgress(10, 'Fetching leads');
             $leads = $this->fetchLeads($startDate, $endDate);
+            
+            $this->reportProgress(40, 'Fetching activities');
             $activities = $this->fetchActivities($startDate, $endDate);
+            
+            $this->reportProgress(60, 'Loading sources');
             $sources = $this->fetchLeadSources();
+            
+            $this->reportProgress(70, 'Processing data');
             $listingRefField = $this->getListingReferenceFieldId();
 
             // Process leads
@@ -306,6 +334,11 @@ class ReportService
             }
             arsort($activitiesByType);
 
+            // Get user analytics
+            $userAnalytics = $this->getUserAnalytics($leads, $activities);
+
+            $this->reportProgress(95, 'Finalizing');
+            
             $report = [
                 'total_leads' => $totalLeads,
                 'leads_by_source' => $leadsBySource,
@@ -313,6 +346,7 @@ class ReportService
                 'listing_ref_field_id' => $listingRefField,
                 'total_activities' => $totalActivities,
                 'activities_by_type' => $activitiesByType,
+                'user_analytics' => $userAnalytics,
                 'start_date' => $startDate,
                 'end_date' => $endDate,
                 'generated_at' => Carbon::now('Asia/Dubai')->toDateTimeString(),
@@ -322,7 +356,8 @@ class ReportService
                 'company_id' => $this->company->id,
                 'total_leads' => $totalLeads,
                 'total_activities' => $totalActivities,
-                'unique_sources' => count($leadsBySource)
+                'unique_sources' => count($leadsBySource),
+                'unique_users' => count($userAnalytics)
             ]);
 
             return $report;
@@ -334,6 +369,80 @@ class ReportService
             ]);
             throw $e;
         }
+    }
+
+    /**
+     * Get users with their activity counts and lead assignments.
+     */
+    public function getUserAnalytics(array $leads, array $activities): array
+    {
+        $this->reportProgress(75, 'Analyzing user activity');
+
+        $activityTypeMap = [
+            1 => 'Task',
+            2 => 'Meeting',
+            3 => 'Call',
+            4 => 'Email',
+            5 => 'Provider',
+            6 => 'SMS',
+            7 => 'Visit',
+        ];
+
+        // Track activities by responsible user
+        $userActivities = [];
+        foreach ($activities as $activity) {
+            $userId = $activity['RESPONSIBLE_ID'] ?? null;
+            if (!$userId) {
+                continue;
+            }
+
+            if (!isset($userActivities[$userId])) {
+                $userActivities[$userId] = [
+                    'total_activities' => 0,
+                    'activities_by_type' => [],
+                ];
+            }
+
+            $userActivities[$userId]['total_activities']++;
+
+            $typeId = $activity['TYPE_ID'] ?? 0;
+            $typeName = $activityTypeMap[$typeId] ?? "Type #{$typeId}";
+            $userActivities[$userId]['activities_by_type'][$typeName] =
+                ($userActivities[$userId]['activities_by_type'][$typeName] ?? 0) + 1;
+        }
+
+        // Track leads by assigned user
+        $userLeads = [];
+        foreach ($leads as $lead) {
+            $userId = $lead['ASSIGNED_BY_ID'] ?? null;
+            if (!$userId) {
+                continue;
+            }
+
+            if (!isset($userLeads[$userId])) {
+                $userLeads[$userId] = 0;
+            }
+
+            $userLeads[$userId]++;
+        }
+
+        // Merge user data
+        $users = [];
+        $allUserIds = array_unique(array_merge(array_keys($userActivities), array_keys($userLeads)));
+
+        foreach ($allUserIds as $userId) {
+            $users[$userId] = [
+                'user_id' => $userId,
+                'total_leads' => $userLeads[$userId] ?? 0,
+                'total_activities' => $userActivities[$userId]['total_activities'] ?? 0,
+                'activities_by_type' => $userActivities[$userId]['activities_by_type'] ?? [],
+            ];
+        }
+
+        // Sort by total activities descending
+        usort($users, fn($a, $b) => $b['total_activities'] <=> $a['total_activities']);
+
+        return $users;
     }
 
     /**
