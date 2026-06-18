@@ -229,34 +229,31 @@ class ReportService
             }
         }
 
+        $freshLeads = [];
         if (!empty($missingDays)) {
             $ranges = $this->buildMissingRanges($missingDays);
             foreach ($ranges as [$rangeStart, $rangeEnd]) {
                 $this->reportProgress(20, "Fetching leads {$rangeStart} to {$rangeEnd}");
-                $this->fetchAndCacheLeadsRange($rangeStart, $rangeEnd, $select);
-            }
-
-            foreach ($missingDays as $day) {
-                $dayCache = $this->cache->get($this->cacheKeyForDate('leads', $day));
-                if ($dayCache !== null) {
-                    $cachedLeads = array_merge($cachedLeads, $dayCache);
-                }
+                $rangeLeads = $this->fetchAndCacheLeadsRange($rangeStart, $rangeEnd, $select);
+                $freshLeads = array_merge($freshLeads, $rangeLeads);
             }
         }
 
-        $allLeads = $cachedLeads;
+        $allLeads = array_merge($cachedLeads, $freshLeads);
 
         Log::info('Leads fetched successfully', [
             'company_id' => $this->company->id,
             'total_leads' => count($allLeads),
             'cached_days' => count($days) - count($missingDays),
             'refreshed_days' => count($missingDays),
+            'cached_count' => count($cachedLeads),
+            'fresh_count' => count($freshLeads),
         ]);
 
         return $allLeads;
     }
 
-    protected function fetchAndCacheLeadsRange(string $rangeStart, string $rangeEnd, array $select): void
+    protected function fetchAndCacheLeadsRange(string $rangeStart, string $rangeEnd, array $select): array
     {
         $allLeads = [];
         $start = 0;
@@ -313,6 +310,8 @@ class ReportService
             ]);
             throw $e;
         }
+
+        return $allLeads;
     }
 
     /**
@@ -335,34 +334,31 @@ class ReportService
             }
         }
 
+        $freshActivities = [];
         if (!empty($missingDays)) {
             $ranges = $this->buildMissingRanges($missingDays);
             foreach ($ranges as [$rangeStart, $rangeEnd]) {
                 $this->reportProgress(45, "Fetching activities {$rangeStart} to {$rangeEnd}");
-                $this->fetchAndCacheActivitiesRange($rangeStart, $rangeEnd);
-            }
-
-            foreach ($missingDays as $day) {
-                $dayCache = $this->cache->get($this->cacheKeyForDate('activities', $day));
-                if ($dayCache !== null) {
-                    $cachedActivities = array_merge($cachedActivities, $dayCache);
-                }
+                $rangeActivities = $this->fetchAndCacheActivitiesRange($rangeStart, $rangeEnd);
+                $freshActivities = array_merge($freshActivities, $rangeActivities);
             }
         }
 
-        $allActivities = $cachedActivities;
+        $allActivities = array_merge($cachedActivities, $freshActivities);
 
         Log::info('Activities fetched successfully', [
             'company_id' => $this->company->id,
             'total_activities' => count($allActivities),
             'cached_days' => count($days) - count($missingDays),
             'refreshed_days' => count($missingDays),
+            'cached_count' => count($cachedActivities),
+            'fresh_count' => count($freshActivities),
         ]);
 
         return $allActivities;
     }
 
-    protected function fetchAndCacheActivitiesRange(string $rangeStart, string $rangeEnd): void
+    protected function fetchAndCacheActivitiesRange(string $rangeStart, string $rangeEnd): array
     {
         $allActivities = [];
         $start = 0;
@@ -422,6 +418,8 @@ class ReportService
             ]);
             throw $e;
         }
+
+        return $allActivities;
     }
 
     /**
