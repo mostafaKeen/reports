@@ -202,7 +202,7 @@
             </div>
 
             <!-- Listing Reference Table -->
-            <div class="glass rounded-2xl p-6" id="listing-ref-section">
+            <div class="glass rounded-2xl p-6 hidden" id="listing-ref-section">
                 <h3 class="text-sm font-bold text-slate-300 uppercase tracking-wider mb-4 flex items-center gap-2">
                     <span class="w-2 h-2 rounded-full bg-purple-500"></span>
                     Leads by Listing Reference
@@ -438,32 +438,37 @@
 
         // Render report data into UI
         function renderReport(data) {
+            const leadsBySource = data.leads_by_source || {};
+            const activitiesByType = data.activities_by_type || {};
+            const listingRefs = data.leads_by_listing_ref || {};
+
             // Stat cards
-            document.getElementById('stat-total-leads').textContent = data.total_leads.toLocaleString();
-            document.getElementById('stat-sources').textContent = Object.keys(data.leads_by_source).length;
-            document.getElementById('stat-total-activities').textContent = data.total_activities.toLocaleString();
-            document.getElementById('stat-generated-at').textContent = data.generated_at;
+            document.getElementById('stat-total-leads').textContent = Number(data.total_leads || 0).toLocaleString();
+            document.getElementById('stat-sources').textContent = Object.keys(leadsBySource).length;
+            document.getElementById('stat-total-activities').textContent = Number(data.total_activities || 0).toLocaleString();
+            document.getElementById('stat-generated-at').textContent = data.generated_at || '—';
 
             // Charts
-            renderBarChart('chart-leads-source', data.leads_by_source, 'Leads');
-            renderDoughnutChart('chart-activities-type', data.activities_by_type, 'Activities');
+            renderBarChart('chart-leads-source', leadsBySource, 'Leads');
+            renderDoughnutChart('chart-activities-type', activitiesByType, 'Activities');
 
             // Tables
-            renderTable('source-tbody', data.leads_by_source, data.total_leads);
-            renderTable('activity-tbody', data.activities_by_type, data.total_activities);
+            renderTable('source-tbody', leadsBySource, Number(data.total_leads || 0));
+            renderTable('activity-tbody', activitiesByType, Number(data.total_activities || 0));
 
             // Listing Reference
-            if (data.leads_by_listing_ref && Object.keys(data.leads_by_listing_ref).length > 0) {
+            if (Object.keys(listingRefs).length > 0) {
                 document.getElementById('listing-ref-section').classList.remove('hidden');
-                renderTable('listing-ref-tbody', data.leads_by_listing_ref, data.total_leads);
+                renderListingRefTable('listing-ref-tbody', listingRefs, Number(data.total_leads || 0));
             } else {
                 document.getElementById('listing-ref-section').classList.add('hidden');
+                document.getElementById('listing-ref-tbody').innerHTML = '';
             }
 
             // User Analytics
             if (data.user_analytics && data.user_analytics.length > 0) {
                 document.getElementById('users-section').classList.remove('hidden');
-                renderUserAnalytics(data.user_analytics, data.total_activities);
+                renderUserAnalytics(data.user_analytics, Number(data.total_activities || 0));
             } else {
                 document.getElementById('users-section').classList.add('hidden');
             }
@@ -578,32 +583,90 @@
             const tbody = document.getElementById(tbodyId);
             tbody.innerHTML = '';
 
-            const entries = Object.entries(dataObj);
-            entries.forEach(([key, count], i) => {
-                const pct = total > 0 ? ((count / total) * 100).toFixed(1) : '0.0';
-                const barWidth = total > 0 ? Math.max(4, (count / total) * 100) : 0;
-                const colorIdx = i % CHART_COLORS.length;
-
-                tbody.innerHTML += `
-                    <tr class="border-b border-slate-800/40 hover:bg-slate-800/20 transition-colors">
-                        <td class="py-3 pr-4">
-                            <div class="flex items-center gap-2">
-                                <span class="w-2 h-2 rounded-full flex-shrink-0" style="background:${CHART_COLORS[colorIdx]}"></span>
-                                <span class="text-slate-200">${escapeHtml(key)}</span>
-                            </div>
-                        </td>
-                        <td class="py-3 pr-4 text-right font-semibold text-slate-200">${count.toLocaleString()}</td>
-                        <td class="py-3 text-right">
-                            <div class="flex items-center justify-end gap-2">
-                                <div class="w-16 h-1.5 bg-slate-800 rounded-full overflow-hidden">
-                                    <div class="h-full rounded-full" style="width:${barWidth}%;background:${CHART_COLORS[colorIdx]}"></div>
-                                </div>
-                                <span class="text-slate-400 text-xs font-mono w-12 text-right">${pct}%</span>
-                            </div>
+            const entries = Object.entries(dataObj || {});
+            if (entries.length === 0) {
+                tbody.innerHTML = `
+                    <tr class="border-b border-slate-800/40">
+                        <td colspan="3" class="py-4 text-center text-slate-500 text-sm">
+                            No data available
                         </td>
                     </tr>
                 `;
-            });
+                return;
+            }
+
+            entries
+                .sort((a, b) => b[1] - a[1])
+                .forEach(([key, count], i) => {
+                    const pct = total > 0 ? ((count / total) * 100).toFixed(1) : '0.0';
+                    const barWidth = total > 0 ? Math.max(4, (count / total) * 100) : 0;
+                    const colorIdx = i % CHART_COLORS.length;
+
+                    tbody.innerHTML += `
+                        <tr class="border-b border-slate-800/40 hover:bg-slate-800/20 transition-colors">
+                            <td class="py-3 pr-4">
+                                <div class="flex items-center gap-2">
+                                    <span class="w-2 h-2 rounded-full flex-shrink-0" style="background:${CHART_COLORS[colorIdx]}"></span>
+                                    <span class="text-slate-200">${escapeHtml(formatTableLabel(key))}</span>
+                                </div>
+                            </td>
+                            <td class="py-3 pr-4 text-right font-semibold text-slate-200">${Number(count || 0).toLocaleString()}</td>
+                            <td class="py-3 text-right">
+                                <div class="flex items-center justify-end gap-2">
+                                    <div class="w-16 h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                                        <div class="h-full rounded-full" style="width:${barWidth}%;background:${CHART_COLORS[colorIdx]}"></div>
+                                    </div>
+                                    <span class="text-slate-400 text-xs font-mono w-12 text-right">${pct}%</span>
+                                </div>
+                            </td>
+                        </tr>
+                    `;
+                });
+        }
+
+        function renderListingRefTable(tbodyId, dataObj, total) {
+            const tbody = document.getElementById(tbodyId);
+            tbody.innerHTML = '';
+
+            const entries = Object.entries(dataObj || {});
+            if (entries.length === 0) {
+                tbody.innerHTML = `
+                    <tr class="border-b border-slate-800/40">
+                        <td colspan="3" class="py-4 text-center text-slate-500 text-sm">
+                            No listing reference data found
+                        </td>
+                    </tr>
+                `;
+                return;
+            }
+
+            entries
+                .sort((a, b) => b[1] - a[1])
+                .forEach(([ref, count], i) => {
+                    const pct = total > 0 ? ((count / total) * 100).toFixed(1) : '0.0';
+                    const barWidth = total > 0 ? Math.max(4, (count / total) * 100) : 0;
+                    const colorIdx = i % CHART_COLORS.length;
+
+                    tbody.innerHTML += `
+                        <tr class="border-b border-slate-800/40 hover:bg-slate-800/20 transition-colors">
+                            <td class="py-3 pr-4">
+                                <div class="flex items-center gap-2">
+                                    <span class="w-2 h-2 rounded-full flex-shrink-0" style="background:${CHART_COLORS[colorIdx]}"></span>
+                                    <span class="text-slate-200">${escapeHtml(formatListingRefLabel(ref))}</span>
+                                </div>
+                            </td>
+                            <td class="py-3 pr-4 text-right font-semibold text-slate-200">${Number(count || 0).toLocaleString()}</td>
+                            <td class="py-3 text-right">
+                                <div class="flex items-center justify-end gap-2">
+                                    <div class="w-16 h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                                        <div class="h-full rounded-full" style="width:${barWidth}%;background:${CHART_COLORS[colorIdx]}"></div>
+                                    </div>
+                                    <span class="text-slate-400 text-xs font-mono w-12 text-right">${pct}%</span>
+                                </div>
+                            </td>
+                        </tr>
+                    `;
+                });
         }
 
         // Render user analytics cards
@@ -655,6 +718,17 @@
 
                 container.innerHTML += card;
             });
+        }
+
+        function formatTableLabel(value) {
+            if (value === null || value === undefined || value === '') return 'Unspecified';
+            return String(value);
+        }
+
+        function formatListingRefLabel(value) {
+            if (value === null || value === undefined || value === '') return 'Unspecified';
+            if (value === '(Empty)') return 'Unspecified';
+            return String(value);
         }
 
         function escapeHtml(str) {
