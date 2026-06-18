@@ -229,6 +229,57 @@ class ReportService
         return $userMap;
     }
 
+    /**
+     * Fetch all active users and build an ID => full name mapping.
+     * Cached for a day to avoid excessive API calls.
+     */
+    protected function getUsersMapping(): array
+    {
+        $cacheKey = 'users_mapping';
+        $cached = $this->cache->get($cacheKey);
+
+        if ($cached !== null) {
+            return $cached;
+        }
+
+        $mapping = [];
+        $start = 0;
+
+        try {
+            do {
+                $response = $this->client->call('user.get', [
+                    'filter' => ['ACTIVE' => true],
+                    'select' => ['ID', 'NAME', 'LAST_NAME', 'EMAIL'],
+                    'order' => ['ID' => 'ASC'],
+                    'start' => $start,
+                ]);
+
+                foreach (($response['result'] ?? []) as $user) {
+                    $id = (string) ($user['ID'] ?? null);
+                    if (!$id) {
+                        continue;
+                    }
+
+                    $fullName = trim(($user['NAME'] ?? '') . ' ' . ($user['LAST_NAME'] ?? '')) ?: ($user['EMAIL'] ?? "User #{$id}");
+                    $mapping[$id] = $fullName;
+                }
+
+                $start = $response['next'] ?? null;
+            } while ($start !== null);
+
+            $this->cache->set($cacheKey, $mapping, self::CACHE_TTL_SOURCES);
+
+            return $mapping;
+        } catch (\Exception $e) {
+            Log::error('Failed to fetch users mapping', [
+                'company_id' => $this->company->id,
+                'error' => $e->getMessage(),
+            ]);
+
+            return [];
+        }
+    }
+
     protected function cacheKeyForDate(string $type, string $date): string
     {
         return "{$type}:date:{$date}";
@@ -571,8 +622,9 @@ class ReportService
             }
             arsort($activitiesByType);
 
-            // Get user analytics
-            $userAnalytics = $this->getUserAnalytics($leads, $activities);
+            // Get users mapping (names) and user analytics
+            $usersMapping = $this->getUsersMapping();
+            $userAnalytics = $this->getUserAnalytics($leads, $activities, $usersMapping);
 
             $this->reportProgress(95, 'Finalizing');
             
@@ -611,7 +663,7 @@ class ReportService
     /**
      * Get users with their activity counts and lead assignments.
      */
-    public function getUserAnalytics(array $leads, array $activities): array
+    public function getUserAnalytics(array $leads, array $activities, array $overrideUserNames = []): array
     {
         $this->reportProgress(75, 'Analyzing user activity');
 
@@ -666,7 +718,15 @@ class ReportService
         // Merge user data
         $users = [];
         $allUserIds = array_unique(array_merge(array_keys($userActivities), array_keys($userLeads)));
+        // Start by fetching names for the user IDs (cached/fallbacks)
         $userNames = $this->getUserNameMap($allUserIds);
+
+        // Apply overrides (e.g., a full users mapping) so fetched names take precedence
+        if (!empty($overrideUserNames)) {
+            foreach ($overrideUserNames as $k => $v) {
+                $userNames[(string) $k] = $v;
+            }
+        }
 
         foreach ($allUserIds as $userId) {
             $users[$userId] = [
