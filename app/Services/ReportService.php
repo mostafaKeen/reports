@@ -57,7 +57,7 @@ class ReportService
      * Returns both "Property Reference" and "Listing Reference" fields when available.
      * Cached for 7 days since fields rarely change.
      */
-    public function getListingReferenceFieldIds(): array
+    public function getListingReferenceFieldId(): array
     {
         $cacheKey = 'listing_ref_fields';
         $cached = $this->cache->get($cacheKey);
@@ -152,7 +152,7 @@ class ReportService
      */
     public function getListingReferenceFieldId(): ?string
     {
-        $ids = $this->getListingReferenceFieldIds();
+        $ids = $this->getListingReferenceFieldId();
         return $ids[0] ?? null;
     }
 
@@ -364,7 +364,7 @@ protected function getDailyKeys(string $startDate, string $endDate): array
      */
         public function fetchLeads(string $startDate, string $endDate, array $selectFields = []): array
     {
-        $listingRefFields = $this->getListingReferenceFieldIds();
+        $listingRefFields = $this->getListingReferenceFieldId();
 
         Log::debug('Fetching leads', [
             'company_id' => $this->company->id,
@@ -600,7 +600,7 @@ protected function getDailyKeys(string $startDate, string $endDate): array
             $sources = $this->fetchLeadSources();
 
             $this->reportProgress(70, 'Processing data');
-            $listingRefFields = $this->getListingReferenceFieldIds();
+            $listingRefFields = $this->getListingReferenceFieldId();
 
             // Process leads
             $totalLeads = count($leads);
