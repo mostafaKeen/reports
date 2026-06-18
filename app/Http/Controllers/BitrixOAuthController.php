@@ -29,10 +29,16 @@ class BitrixOAuthController extends Controller
     }
 
     /**
-     * Handle the callback redirection from Bitrix24 OAuth server.
+     * Handle both OAuth callback (GET) and installation callback (POST) from Bitrix24.
      */
     public function callback(Request $request)
     {
+        // Check if this is a POST installation callback
+        if ($request->isMethod('post')) {
+            return $this->handleInstallationCallback($request);
+        }
+
+        // Otherwise, handle GET OAuth callback
         $code = $request->query('code');
         $companyId = $request->query('state');
         $memberId = $request->query('member_id');
@@ -74,7 +80,8 @@ class BitrixOAuthController extends Controller
                 'expires_at' => now()->addSeconds((int) ($data['expires_in'] ?? 3600)),
             ]);
 
-            return redirect()->route('companies.index')
+            // Redirect to dashboard after successful connection
+            return redirect()->route('report.show', ['company' => $company->id])
                 ->with('success', "Successfully connected {$company->name} to Bitrix24!");
 
         } catch (Exception $e) {
@@ -86,6 +93,72 @@ class BitrixOAuthController extends Controller
             return redirect()->route('companies.index')
                 ->with('error', 'OAuth Error: ' . $e->getMessage());
         }
+    }
+
+    /**
+     * Handle POST installation callback from Bitrix24.
+     */
+    private function handleInstallationCallback(Request $request)
+    {
+        $payload = $request->all();
+        $domain = $request->input('DOMAIN') ?? $request->input('auth.domain');
+        $memberId = $request->input('member_id') ?? $request->input('auth.member_id');
+        $accessToken = $request->input('AUTH_ID') ?? $request->input('auth.access_token');
+        $refreshToken = $request->input('REFRESH_ID') ?? $request->input('auth.refresh_token');
+        $expiresIn = $request->input('AUTH_EXPIRES') ?? $request->input('auth.expires_in', 3600);
+
+        if (!$domain || !$accessToken || !$refreshToken) {
+            Log::warning('Bitrix installation callback missing credentials', ['payload' => $payload]);
+            if ($request->wantsJson()) {
+                return response()->json(['error' => 'Missing install credentials'], 400);
+            }
+            abort(400, 'Missing install credentials');
+        }
+
+        // Sanitize and match domain
+        $sanitizedDomain = preg_replace('/^https?:\/\//i', '', $domain);
+        $sanitizedDomain = rtrim($sanitizedDomain, '/');
+
+        $company = Company::where('domain', $sanitizedDomain)->first();
+
+        if ($company) {
+            if (!$company->is_active) {
+                Log::warning('Bitrix installation callback blocked: Company is deactivated', ['domain' => $domain]);
+                if ($request->wantsJson()) {
+                    return response()->json(['error' => 'Registered company is currently deactivated'], 403);
+                }
+                return response()->view('bitrix24.install_wizard_error', [
+                    'message' => 'This domain is registered but currently deactivated. Please activate it in the admin panel.'
+                ], 403);
+            }
+
+            Log::info("Bitrix installation callback success for company", ['name' => $company->name]);
+
+            $company->update([
+                'member_id' => $memberId,
+                'access_token' => $accessToken,
+                'refresh_token' => $refreshToken,
+                'expires_at' => now()->addSeconds((int) $expiresIn),
+            ]);
+
+            if ($request->wantsJson()) {
+                return response()->json(['success' => true]);
+            }
+            return view('bitrix24.install_complete');
+        }
+
+        // If company doesn't exist, render the wizard to capture App ID and App Secret
+        if ($request->wantsJson()) {
+            return response()->json(['error' => 'Domain not registered in Dashboard'], 404);
+        }
+
+        return view('bitrix24.install_wizard', [
+            'domain' => $sanitizedDomain,
+            'member_id' => $memberId,
+            'access_token' => $accessToken,
+            'refresh_token' => $refreshToken,
+            'expires_in' => $expiresIn
+        ]);
     }
 
     /**
@@ -170,6 +243,12 @@ class BitrixOAuthController extends Controller
             'refresh_token' => 'required|string',
             'expires_in' => 'required|integer',
         ]);
+
+        // Validate domain format
+        if (!preg_match('/^[a-z0-9\-\.]+\.bitrix24\.com$/i', $validated['domain'])) {
+            return redirect()->route('companies.index')
+                ->with('error', 'Invalid Bitrix24 domain format');
+        }
 
         $company = Company::create([
             'name' => $validated['name'],

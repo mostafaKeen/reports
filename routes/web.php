@@ -24,11 +24,12 @@ Route::middleware('auth')->group(function () {
 
 // OAuth Flows
 Route::get('/bitrix24/connect/{company}', [BitrixOAuthController::class, 'connect'])->name('bitrix24.connect');
-Route::get('/bitrix24/callback', [BitrixOAuthController::class, 'callback'])->name('bitrix24.callback');
+// Handle both GET (OAuth redirect) and POST (installation callback) on the same endpoint
+Route::match(['get', 'post'], '/bitrix24/callback', [BitrixOAuthController::class, 'callback'])->name('bitrix24.callback');
 Route::post('/bitrix24/install', [BitrixOAuthController::class, 'install'])->name('bitrix24.install');
 Route::post('/bitrix24/install/complete', [BitrixOAuthController::class, 'completeInstall'])->name('bitrix24.install.complete');
 
-// Inbound webhook endpoints (exclude from CSRF in bootstrap/app.php if needed)
+// Inbound webhook endpoints (excluded from CSRF in bootstrap/app.php)
 Route::post('/webhook/bitrix24', [BitrixWebhookController::class, 'handle'])->name('bitrix24.webhook');
 
 // ── Reporting Dashboard ──────────────────────────────────────────────
