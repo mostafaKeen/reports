@@ -65,7 +65,7 @@ class ReportService
 
             foreach ($fields as $fieldId => $fieldMeta) {
                 $title = $fieldMeta['title'] ?? $fieldMeta['formLabel'] ?? $fieldMeta['listLabel'] ?? '';
-                if (stripos($title, 'Listing Reference') !== false) {
+                if (stripos($title, 'Listing Reference') !== false || stripos($title, 'Property Reference') !== false) {
                     $this->cache->set($cacheKey, $fieldId, self::CACHE_TTL_FIELDS);
                     return $fieldId;
                 }
