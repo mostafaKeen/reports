@@ -15,9 +15,9 @@ class ReportService
 
     // Cache TTLs
     protected const CACHE_TTL_FIELDS = 86400 * 7;      // 7 days for field definitions
-    protected const CACHE_TTL_SOURCES = 86400;          // 24 hours for sources
-    protected const CACHE_TTL_LEADS = 300;              // 5 minutes for leads
-    protected const CACHE_TTL_ACTIVITIES = 300;         // 5 minutes for activities
+    protected const CACHE_TTL_SOURCES = 86400;         // 24 hours for sources
+    protected const CACHE_TTL_LEADS = 300;             // 5 minutes for leads
+    protected const CACHE_TTL_ACTIVITIES = 300;        // 5 minutes for activities
 
     // Known Listing Reference field IDs in Bitrix24 (for this specific setup)
     protected const KNOWN_LISTING_REF_FIELDS = [
@@ -52,12 +52,12 @@ class ReportService
         }
     }
 
-        /**
+    /**
      * Resolve all custom field IDs that may contain the listing/property reference.
      * Returns both "Property Reference" and "Listing Reference" fields when available.
      * Cached for 7 days since fields rarely change.
      */
-    public function getListingReferenceFieldId(): array
+    public function getListingReferenceFieldIds(): array
     {
         $cacheKey = 'listing_ref_fields';
         $cached = $this->cache->get($cacheKey);
@@ -152,11 +152,11 @@ class ReportService
      */
     public function getListingReferenceFieldId(): ?string
     {
-        $ids = $this->getListingReferenceFieldId();
+        $ids = $this->getListingReferenceFieldIds();
         return $ids[0] ?? null;
     }
 
-protected function getDailyKeys(string $startDate, string $endDate): array
+    protected function getDailyKeys(string $startDate, string $endDate): array
     {
         $start = Carbon::parse($startDate, 'Asia/Dubai')->startOfDay();
         $end = Carbon::parse($endDate, 'Asia/Dubai')->startOfDay();
@@ -212,7 +212,6 @@ protected function getDailyKeys(string $startDate, string $endDate): array
             return [];
         }
 
-        // Normalize all IDs to strings for consistent cache key matching
         $userIds = array_map('strval', $userIds);
 
         $cacheKey = 'user_names';
@@ -242,7 +241,6 @@ protected function getDailyKeys(string $startDate, string $endDate): array
     protected function fetchUsersByIds(array $userIds): array
     {
         $userMap = [];
-        // Ensure all IDs are strings
         $userIds = array_map('strval', array_filter($userIds));
 
         if (empty($userIds)) {
@@ -362,9 +360,9 @@ protected function getDailyKeys(string $startDate, string $endDate): array
      * Fetch all leads within date range with pagination.
      * Cached by day to allow partial range reuse.
      */
-        public function fetchLeads(string $startDate, string $endDate, array $selectFields = []): array
+    public function fetchLeads(string $startDate, string $endDate, array $selectFields = []): array
     {
-        $listingRefFields = $this->getListingReferenceFieldId();
+        $listingRefFields = $this->getListingReferenceFieldIds();
 
         Log::debug('Fetching leads', [
             'company_id' => $this->company->id,
@@ -423,7 +421,85 @@ protected function getDailyKeys(string $startDate, string $endDate): array
         return $allLeads;
     }
 
-/**
+    protected function fetchAndCacheLeadsRange(string $rangeStart, string $rangeEnd, array $select): array
+    {
+        $allLeads = [];
+        $start = 0;
+
+        try {
+            do {
+                Log::debug('Fetching leads batch for range', [
+                    'company_id' => $this->company->id,
+                    'range_start' => $rangeStart,
+                    'range_end' => $rangeEnd,
+                    'offset' => $start,
+                    'select_fields' => $select
+                ]);
+
+                $response = $this->client->call('crm.lead.list', [
+                    'filter' => [
+                        '>=DATE_CREATE' => Carbon::parse($rangeStart, 'Asia/Dubai')->startOfDay()->format('Y-m-d H:i:s'),
+                        '<=DATE_CREATE' => Carbon::parse($rangeEnd, 'Asia/Dubai')->endOfDay()->format('Y-m-d H:i:s'),
+                    ],
+                    'select' => $select,
+                    'order' => ['DATE_CREATE' => 'ASC'],
+                    'start' => $start,
+                ]);
+
+                $leads = $response['result'] ?? [];
+
+                Log::debug('Leads batch received', [
+                    'company_id' => $this->company->id,
+                    'batch_count' => count($leads),
+                    'has_next' => isset($response['next'])
+                ]);
+
+                $allLeads = array_merge($allLeads, $leads);
+
+                $next = $response['next'] ?? null;
+                $start = $next;
+            } while ($next !== null);
+
+            $dayBuckets = [];
+            foreach ($allLeads as $lead) {
+                $dateValue = $lead['DATE_CREATE'] ?? null;
+                if (!$dateValue) {
+                    continue;
+                }
+
+                $day = Carbon::parse($dateValue, 'Asia/Dubai')->format('Y-m-d');
+                $key = $this->cacheKeyForDate('leads', $day);
+                $dayBuckets[$key][] = $lead;
+            }
+
+            foreach ($this->getDailyKeys($rangeStart, $rangeEnd) as $day) {
+                $cacheKey = $this->cacheKeyForDate('leads', $day);
+                $bucket = $dayBuckets[$cacheKey] ?? [];
+                $this->cache->set($cacheKey, $bucket, self::CACHE_TTL_LEADS);
+            }
+
+            Log::info('Leads range cached', [
+                'company_id' => $this->company->id,
+                'total_leads' => count($allLeads),
+                'range_start' => $rangeStart,
+                'range_end' => $rangeEnd
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('Failed to fetch leads range', [
+                'company_id' => $this->company->id,
+                'range_start' => $rangeStart,
+                'range_end' => $rangeEnd,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            throw $e;
+        }
+
+        return $allLeads;
+    }
+
+    /**
      * Fetch all activities within date range.
      * Cached for 5 minutes.
      */
@@ -580,7 +656,7 @@ protected function getDailyKeys(string $startDate, string $endDate): array
      * Aggregate report data from all sources.
      * Intelligent caching to minimize API calls.
      */
-        public function aggregateReport(string $startDate, string $endDate): array
+    public function aggregateReport(string $startDate, string $endDate): array
     {
         Log::info("Generating report", [
             'company_id' => $this->company->id,
@@ -589,7 +665,6 @@ protected function getDailyKeys(string $startDate, string $endDate): array
         ]);
 
         try {
-            // Fetch all data (with caching)
             $this->reportProgress(10, 'Fetching leads');
             $leads = $this->fetchLeads($startDate, $endDate);
 
@@ -600,7 +675,7 @@ protected function getDailyKeys(string $startDate, string $endDate): array
             $sources = $this->fetchLeadSources();
 
             $this->reportProgress(70, 'Processing data');
-            $listingRefFields = $this->getListingReferenceFieldId();
+            $listingRefFields = $this->getListingReferenceFieldIds();
 
             // Process leads
             $totalLeads = count($leads);
@@ -679,7 +754,7 @@ protected function getDailyKeys(string $startDate, string $endDate): array
 
             $this->reportProgress(95, 'Finalizing');
 
-            $report = [
+            return [
                 'total_leads' => $totalLeads,
                 'leads_by_source' => $leadsBySource,
                 'leads_by_listing_ref' => $leadsByListingRef,
@@ -692,17 +767,6 @@ protected function getDailyKeys(string $startDate, string $endDate): array
                 'generated_at' => Carbon::now('Asia/Dubai')->toDateTimeString(),
             ];
 
-            Log::info("Report generated successfully", [
-                'company_id' => $this->company->id,
-                'total_leads' => $totalLeads,
-                'total_activities' => $totalActivities,
-                'unique_sources' => count($leadsBySource),
-                'unique_listing_refs' => count($leadsByListingRef),
-                'unique_users' => count($userAnalytics)
-            ]);
-
-            return $report;
-
         } catch (\Exception $e) {
             Log::error("Failed to generate report", [
                 'company_id' => $this->company->id,
@@ -713,7 +777,7 @@ protected function getDailyKeys(string $startDate, string $endDate): array
         }
     }
 
-/**
+    /**
      * Get users with their activity counts and lead assignments.
      */
     public function getUserAnalytics(array $leads, array $activities, array $overrideUserNames = []): array
@@ -768,13 +832,10 @@ protected function getDailyKeys(string $startDate, string $endDate): array
             $userLeads[$userId]++;
         }
 
-        // Merge user data
         $users = [];
         $allUserIds = array_unique(array_merge(array_keys($userActivities), array_keys($userLeads)));
-        // Start by fetching names for the user IDs (cached/fallbacks)
         $userNames = $this->getUserNameMap($allUserIds);
 
-        // Apply overrides (e.g., a full users mapping) so fetched names take precedence
         if (!empty($overrideUserNames)) {
             foreach ($overrideUserNames as $k => $v) {
                 $userNames[(string) $k] = $v;
@@ -791,7 +852,6 @@ protected function getDailyKeys(string $startDate, string $endDate): array
             ];
         }
 
-        // Sort by total activities descending
         usort($users, fn($a, $b) => $b['total_activities'] <=> $a['total_activities']);
 
         return $users;
