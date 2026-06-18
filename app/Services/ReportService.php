@@ -21,8 +21,8 @@ class ReportService
 
     // Known Listing Reference field IDs in Bitrix24 (for this specific setup)
     protected const KNOWN_LISTING_REF_FIELDS = [
-        'UF_CRM_1772139089925', // Property Reference
-        'UF_CRM_1774618391777', // Listing Reference
+        // 'UF_CRM_1772139089925', // Property Reference
+        // 'UF_CRM_1774618391777', // Listing Reference
     ];
 
     public function __construct(Company $company)
