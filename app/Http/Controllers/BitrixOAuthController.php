@@ -144,7 +144,8 @@ class BitrixOAuthController extends Controller
             if ($request->wantsJson()) {
                 return response()->json(['success' => true]);
             }
-            return view('bitrix24.install_complete');
+            // Pass company to the view for redirect
+            return view('bitrix24.install_complete', ['company' => $company]);
         }
 
         // If company doesn't exist, render the wizard to capture App ID and App Secret
@@ -211,7 +212,8 @@ class BitrixOAuthController extends Controller
             if ($request->wantsJson()) {
                 return response()->json(['success' => true]);
             }
-            return view('bitrix24.install_complete');
+            // Pass company to the view for redirect
+            return view('bitrix24.install_complete', ['company' => $company]);
         }
 
         // If company doesn't exist, we render the wizard to capture App ID and App Secret
@@ -264,6 +266,7 @@ class BitrixOAuthController extends Controller
 
         Log::info("Bitrix installation wizard completed successfully for company", ['name' => $company->name]);
 
-        return view('bitrix24.install_complete');
+        // Pass company to the view for redirect
+        return view('bitrix24.install_complete', ['company' => $company]);
     }
 }

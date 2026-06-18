@@ -30,11 +30,17 @@
             </svg>
         </div>
         <h1 class="text-2xl font-bold bg-gradient-to-r from-emerald-400 to-indigo-400 bg-clip-text text-transparent">
-            Installation Finished!
+            Installation Complete!
         </h1>
-        <p class="text-slate-400 text-sm mt-2">
-            The workspace was registered and authenticated in the console. Finializing local setup with Bitrix24...
+        <p class="text-slate-400 text-sm mt-2 mb-6">
+            The workspace was registered and authenticated. Redirecting to your dashboard...
         </p>
+        
+        <!-- Fallback link in case redirect doesn't work -->
+        <a href="{{ route('report.show', ['company' => $company->id]) }}" 
+            class="inline-block mt-4 px-4 py-2 bg-indigo-500 hover:bg-indigo-600 text-white text-sm rounded-lg transition-colors">
+            Go to Dashboard
+        </a>
     </div>
 
     <script>
@@ -43,6 +49,11 @@
             console.log("Bitrix24 SDK Initialized. Finishing Installation...");
             BX24.installFinish();
         });
+
+        // Redirect to the reports dashboard after 2 seconds
+        setTimeout(function() {
+            window.location.href = "{{ route('report.show', ['company' => $company->id]) }}";
+        }, 2000);
     </script>
 </body>
 </html>
