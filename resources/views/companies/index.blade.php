@@ -218,6 +218,10 @@
                                                 class="block w-full text-center bg-slate-900 border border-slate-800 hover:border-indigo-500 text-indigo-400 hover:text-indigo-300 font-semibold rounded-xl py-2 text-xs transition-all">
                                                 Reconnect OAuth
                                             </a>
+                                            <a href="{{ route('report.show', $company) }}" 
+                                                class="block w-full text-center bg-gradient-to-r from-purple-600/20 to-pink-600/20 border border-purple-500/20 hover:border-purple-500/40 text-purple-400 hover:text-purple-300 font-semibold rounded-xl py-2 text-xs transition-all">
+                                                📊 View Reports
+                                            </a>
                                         @else
                                             <a href="{{ route('bitrix24.connect', $company) }}" 
                                                 class="block w-full text-center bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl py-2 text-xs transition-all shadow-md shadow-indigo-600/10">

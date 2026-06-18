@@ -94,11 +94,12 @@ class BitrixOAuthController extends Controller
     public function install(Request $request)
     {
         $payload = $request->all();
-        $domain = $request->input('auth.domain');
-        $memberId = $request->input('auth.member_id');
-        $accessToken = $request->input('auth.access_token');
-        $refreshToken = $request->input('auth.refresh_token');
-        $expiresIn = $request->input('auth.expires_in', 3600);
+        // Use Bitrix24's actual key names
+        $domain = $request->input('DOMAIN') ?? $request->input('auth.domain');
+        $memberId = $request->input('member_id') ?? $request->input('auth.member_id');
+        $accessToken = $request->input('AUTH_ID') ?? $request->input('auth.access_token');
+        $refreshToken = $request->input('REFRESH_ID') ?? $request->input('auth.refresh_token');
+        $expiresIn = $request->input('AUTH_EXPIRES') ?? $request->input('auth.expires_in', 3600);
 
         if (!$domain || !$accessToken || !$refreshToken) {
             Log::warning('Bitrix installation callback missing credentials', ['payload' => $payload]);

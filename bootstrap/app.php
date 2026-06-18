@@ -14,6 +14,7 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->validateCsrfTokens(except: [
             'webhook/bitrix24',
             'bitrix24/install',
+            'report/*/clear-cache',
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
