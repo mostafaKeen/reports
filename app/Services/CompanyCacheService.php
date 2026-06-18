@@ -2,56 +2,118 @@
 
 namespace App\Services;
 
-use App\Models\Company;
 use Illuminate\Support\Facades\Redis;
+use Illuminate\Support\Facades\Log;
 
 class CompanyCacheService
 {
-    protected Company $company;
+    protected $company;
+    protected $prefix = 'company:';
 
-    public function __construct(Company $company)
+    public function __construct($company)
     {
         $this->company = $company;
+        $this->prefix .= $company->id . ':report:';
     }
 
     /**
-     * Helper to prefix the cache key.
-     */
-    protected function getNamespacedKey(string $key): string
-    {
-        return "company:{$this->company->id}:{$key}";
-    }
-
-    /**
-     * Get a value from Redis cache.
+     * Get a value from cache.
+     * Returns null if key doesn't exist or Redis fails.
      */
     public function get(string $key)
     {
-        $cached = Redis::get($this->getNamespacedKey($key));
-        return $cached ? json_decode($cached, true) : null;
+        try {
+            $fullKey = $this->prefix . $key;
+            $value = Redis::get($fullKey);
+
+            if ($value !== null) {
+                return json_decode($value, true);
+            }
+
+            return null;
+        } catch (\Exception $e) {
+            Log::warning('Cache get failed, returning null', [
+                'key' => $key,
+                'error' => $e->getMessage()
+            ]);
+            return null;
+        }
     }
 
     /**
-     * Set a value in Redis cache with an optional TTL (seconds).
+     * Set a value in cache with optional TTL.
+     * Silently fails if Redis is unavailable.
      */
-    public function set(string $key, $value, int $ttl = 60): void
+    public function set(string $key, $value, int $ttl = 300): bool
     {
-        Redis::setex($this->getNamespacedKey($key), $ttl, json_encode($value));
+        try {
+            $fullKey = $this->prefix . $key;
+            $encoded = json_encode($value);
+
+            if ($ttl > 0) {
+                Redis::setex($fullKey, $ttl, $encoded);
+            } else {
+                Redis::set($fullKey, $encoded);
+            }
+
+            return true;
+        } catch (\Exception $e) {
+            Log::warning('Cache set failed, continuing without cache', [
+                'key' => $key,
+                'ttl' => $ttl,
+                'error' => $e->getMessage()
+            ]);
+            return false;
+        }
     }
 
     /**
-     * Delete a key from Redis cache.
+     * Delete a value from cache.
      */
-    public function forget(string $key): void
+    public function delete(string $key): bool
     {
-        Redis::del($this->getNamespacedKey($key));
+        try {
+            $fullKey = $this->prefix . $key;
+            Redis::del($fullKey);
+            return true;
+        } catch (\Exception $e) {
+            Log::warning('Cache delete failed', [
+                'key' => $key,
+                'error' => $e->getMessage()
+            ]);
+            return false;
+        }
     }
 
     /**
-     * Increment a hash field or key value.
+     * Clear all report cache for this company.
      */
-    public function increment(string $key, int $amount = 1): int
+    public function flush(): bool
     {
-        return Redis::incrby($this->getNamespacedKey($key), $amount);
+        try {
+            $pattern = $this->prefix . '*';
+            $iterator = null;
+
+            do {
+                $keys = Redis::scan($iterator, [
+                    'MATCH' => $pattern,
+                    'COUNT' => 100,
+                ]);
+
+                if ($keys && is_array($keys[1]) && count($keys[1]) > 0) {
+                    Redis::del(...$keys[1]);
+                }
+
+                $iterator = $keys[0] ?? null;
+            } while ($iterator && $iterator !== '0' && $iterator !== 0);
+
+            return true;
+        } catch (\Exception $e) {
+            Log::warning('Cache flush failed', [
+                'company_id' => $this->company->id,
+                'error' => $e->getMessage()
+            ]);
+            return false;
+        }
     }
 }
