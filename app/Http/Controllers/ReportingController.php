@@ -18,7 +18,7 @@ use Illuminate\Support\Facades\Log;
  * - Enhanced CSV export to include Property Reference breakdown
  * - Added property reference field detection with caching
  */
-class ReportingControllerEnhanced extends Controller
+class ReportingController extends Controller
 {
     /**
      * Show the report page.
