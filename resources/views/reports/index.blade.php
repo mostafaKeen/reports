@@ -10,6 +10,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+    <script src="//api.bitrix24.com/api/v1/"></script>
     <script>
         tailwind.config = {
             theme: {
@@ -44,10 +45,12 @@
         <!-- ═══════════════════ HEADER ═══════════════════ -->
         <header class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-10">
             <div>
-                <a href="{{ route('companies.index') }}" class="text-xs text-slate-500 hover:text-indigo-400 transition-colors mb-2 inline-flex items-center gap-1">
-                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
-                    Back to Companies
-                </a>
+                @if(!$isBitrix24Context)
+                    <a href="{{ route('companies.index') }}" class="text-xs text-slate-500 hover:text-indigo-400 transition-colors mb-2 inline-flex items-center gap-1">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+                        Back to Companies
+                    </a>
+                @endif
                 <h1 class="text-3xl sm:text-4xl font-extrabold tracking-tight gradient-text" id="page-title">
                     Reports
                 </h1>
@@ -65,16 +68,18 @@
         <!-- ═══════════════════ CONTROLS BAR ═══════════════════ -->
         <div class="glass rounded-2xl p-5 mb-8 fade-in">
             <div class="flex flex-col md:flex-row items-start md:items-end gap-4">
-                <!-- Company selector -->
-                <div class="flex-1 min-w-[180px]">
-                    <label class="block text-[10px] font-semibold text-slate-500 uppercase tracking-widest mb-1.5">Company</label>
-                    <select id="company-select"
-                        class="w-full bg-slate-900/70 border border-slate-800 rounded-xl px-3 py-2.5 text-sm text-slate-200 focus:outline-none focus:border-indigo-500 transition-all">
-                        @foreach($companies as $c)
-                            <option value="{{ $c->id }}" {{ $c->id == $company->id ? 'selected' : '' }}>{{ $c->name }}</option>
-                        @endforeach
-                    </select>
-                </div>
+                <!-- Company selector (hidden in Bitrix24 context) -->
+                @if(!$isBitrix24Context)
+                    <div class="flex-1 min-w-[180px]">
+                        <label class="block text-[10px] font-semibold text-slate-500 uppercase tracking-widest mb-1.5">Company</label>
+                        <select id="company-select"
+                            class="w-full bg-slate-900/70 border border-slate-800 rounded-xl px-3 py-2.5 text-sm text-slate-200 focus:outline-none focus:border-indigo-500 transition-all">
+                            @foreach($companies as $c)
+                                <option value="{{ $c->id }}" {{ $c->id == $company->id ? 'selected' : '' }}>{{ $c->name }}</option>
+                            @endforeach
+                        </select>
+                    </div>
+                @endif
 
                 <!-- Date pickers -->
                 <div class="flex-1 min-w-[150px]">
@@ -121,8 +126,11 @@
         <div id="error-state" class="hidden">
             <div class="glass rounded-2xl p-8 text-center border-rose-500/20">
                 <div class="text-4xl mb-3">⚠️</div>
-                <p class="text-rose-400 font-semibold mb-1">Failed to load report</p>
-                <p class="text-slate-500 text-sm" id="error-message"></p>
+                <p class="text-rose-400 font-semibold mb-2">Failed to load report</p>
+                <p class="text-slate-500 text-sm mb-4" id="error-message"></p>
+                <button onclick="showState('empty')" class="text-xs bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 px-3 py-1.5 rounded-lg transition-colors">
+                    Try Again
+                </button>
             </div>
         </div>
 
@@ -251,6 +259,7 @@
     <!-- ═══════════════════ JAVASCRIPT ═══════════════════ -->
     <script>
         const CSRF_TOKEN = '{{ csrf_token() }}';
+        const IS_BITRIX_CONTEXT = {{ $isBitrix24Context ? 'true' : 'false' }};
         let currentCompanyId = {{ $company->id }};
         let chartLeadsSource = null;
         let chartActivitiesType = null;
@@ -272,12 +281,14 @@
 
         const CHART_BORDERS = CHART_COLORS.map(c => c.replace('0.85', '1'));
 
-        // Company selector change
-        document.getElementById('company-select').addEventListener('change', function() {
-            currentCompanyId = this.value;
-            const url = `/report/${currentCompanyId}?start_date=${document.getElementById('start-date').value}&end_date=${document.getElementById('end-date').value}`;
-            window.location.href = url;
-        });
+        // Company selector change (only if not in Bitrix24)
+        if (!IS_BITRIX_CONTEXT && document.getElementById('company-select')) {
+            document.getElementById('company-select').addEventListener('change', function() {
+                currentCompanyId = this.value;
+                const url = `/report/${currentCompanyId}?start_date=${document.getElementById('start-date').value}&end_date=${document.getElementById('end-date').value}`;
+                window.location.href = url;
+            });
+        }
 
         // Fetch report data via AJAX
         async function fetchReport() {
@@ -296,7 +307,7 @@
                 const json = await res.json();
 
                 if (!json.success) {
-                    throw new Error(json.error || 'Unknown error');
+                    throw new Error(json.error || 'Unknown error occurred');
                 }
 
                 lastReportData = json.data;
@@ -304,7 +315,8 @@
                 showState('content');
                 document.getElementById('btn-export').disabled = false;
             } catch (err) {
-                document.getElementById('error-message').textContent = err.message;
+                console.error('Report fetch error:', err);
+                document.getElementById('error-message').textContent = err.message || 'Failed to fetch report data. Please try again.';
                 showState('error');
             }
         }
@@ -335,6 +347,7 @@
                     if (lastReportData) fetchReport();
                 }
             } catch (err) {
+                console.error('Cache clear error:', err);
                 btn.innerHTML = 'Error';
                 setTimeout(() => {
                     btn.innerHTML = `<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg> Refresh`;
@@ -525,6 +538,14 @@
             div.textContent = str;
             return div.innerHTML;
         }
+
+        // Auto-load report on page load if in Bitrix24 context
+        document.addEventListener('DOMContentLoaded', function() {
+            if (IS_BITRIX_CONTEXT) {
+                // Small delay to ensure Bitrix24 SDK is ready
+                setTimeout(fetchReport, 500);
+            }
+        });
     </script>
 </body>
 </html>

@@ -18,6 +18,7 @@ class BitrixClient
 
     /**
      * Call a Bitrix24 REST API method.
+     * Auth token is sent as a query parameter, not in the request body.
      */
     public function call(string $method, array $params = []): array
     {
@@ -27,23 +28,55 @@ class BitrixClient
 
         $this->ensureValidToken();
 
+        // Build endpoint with auth token as query parameter
         $endpoint = "https://{$this->company->domain}/rest/{$method}.json";
         
-        $response = Http::post($endpoint, array_merge($params, [
-            'auth' => $this->company->access_token
-        ]));
+        $response = Http::post($endpoint, $params, [
+            'auth' => [$this->company->access_token, ''], // This sends auth as Bearer token
+        ]);
+
+        // Alternative approach if the above doesn't work:
+        // $queryParams = array_merge($params, ['auth' => $this->company->access_token]);
+        // $response = Http::post($endpoint . '?' . http_build_query(['auth' => $this->company->access_token]), $params);
 
         if ($response->failed()) {
+            $statusCode = $response->status();
+            $body = $response->body();
+            
             Log::error("Bitrix24 API Error", [
                 'company_id' => $this->company->id,
                 'method' => $method,
-                'status' => $response->status(),
-                'body' => $response->body()
+                'status' => $statusCode,
+                'body' => $body
             ]);
-            throw new Exception("Bitrix24 API call failed: " . $response->body());
+
+            // If 401 (Unauthorized), try to refresh token
+            if ($statusCode === 401) {
+                Log::warning("Got 401 from Bitrix24, attempting token refresh", [
+                    'company_id' => $this->company->id
+                ]);
+                $this->refreshToken();
+                // Retry the request with new token
+                return $this->call($method, $params);
+            }
+
+            throw new Exception("Bitrix24 API call failed: " . $body);
         }
 
-        return $response->json();
+        $responseData = $response->json();
+
+        // Check for Bitrix24 error in response
+        if (isset($responseData['error']) && $responseData['error']) {
+            Log::error("Bitrix24 API returned error", [
+                'company_id' => $this->company->id,
+                'method' => $method,
+                'error' => $responseData['error'],
+                'error_description' => $responseData['error_description'] ?? null
+            ]);
+            throw new Exception("Bitrix24 API error: " . ($responseData['error_description'] ?? $responseData['error']));
+        }
+
+        return $responseData;
     }
 
     /**
@@ -98,5 +131,7 @@ class BitrixClient
             'refresh_token' => $data['refresh_token'],
             'expires_at' => now()->addSeconds((int) ($data['expires_in'] ?? 3600)),
         ]);
+
+        Log::info("Bitrix24 token refreshed successfully", ['id' => $this->company->id]);
     }
 }
