@@ -139,10 +139,13 @@ class ReportService
             return [];
         }
 
+        // Normalize all IDs to strings for consistent cache key matching
+        $userIds = array_map('strval', $userIds);
+
         $cacheKey = 'user_names';
         $cached = $this->cache->get($cacheKey) ?? [];
-        $cachedIds = array_map('strval', array_keys($cached));
-        $missingIds = array_values(array_filter($userIds, fn($id) => !in_array((string) $id, $cachedIds, true)));
+        $cachedIds = array_keys($cached);
+        $missingIds = array_values(array_diff($userIds, $cachedIds));
 
         if (!empty($missingIds)) {
             $fresh = $this->fetchUsersByIds($missingIds);
@@ -152,10 +155,11 @@ class ReportService
 
         $result = [];
         foreach ($userIds as $id) {
-            if (isset($cached[$id])) {
-                $result[$id] = $cached[$id];
+            $idStr = (string) $id;
+            if (isset($cached[$idStr])) {
+                $result[$idStr] = $cached[$idStr];
             } else {
-                $result[$id] = "User #{$id}";
+                $result[$idStr] = "User #{$idStr}";
             }
         }
 
@@ -165,6 +169,13 @@ class ReportService
     protected function fetchUsersByIds(array $userIds): array
     {
         $userMap = [];
+        // Ensure all IDs are strings
+        $userIds = array_map('strval', array_filter($userIds));
+
+        if (empty($userIds)) {
+            return [];
+        }
+
         $chunkSize = 50;
         $chunks = array_chunk($userIds, $chunkSize);
 
@@ -179,8 +190,8 @@ class ReportService
                 ]);
 
                 foreach (($response['result'] ?? []) as $user) {
-                    $id = $user['ID'] ?? null;
-                    if ($id === null) {
+                    $id = (string) ($user['ID'] ?? null);
+                    if (!$id) {
                         continue;
                     }
 
