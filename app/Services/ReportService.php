@@ -52,49 +52,49 @@ class ReportService
         }
     }
 
-    /**
-     * Resolve the "Listing Reference" custom field ID.
-     * Checks both static field IDs and searches through available fields.
+        /**
+     * Resolve all custom field IDs that may contain the listing/property reference.
+     * Returns both "Property Reference" and "Listing Reference" fields when available.
      * Cached for 7 days since fields rarely change.
      */
-    public function getListingReferenceFieldId(): ?string
+    public function getListingReferenceFieldIds(): array
     {
-        $cacheKey = 'listing_ref_field';
+        $cacheKey = 'listing_ref_fields';
         $cached = $this->cache->get($cacheKey);
 
-        if ($cached !== null) {
-            Log::info('Using cached listing ref field', [
+        if (is_array($cached)) {
+            Log::info('Using cached listing ref fields', [
                 'company_id' => $this->company->id,
-                'field_id' => $cached
+                'field_ids' => $cached
             ]);
             return $cached;
         }
 
         try {
-            // First, try known field IDs for this setup
             $response = $this->client->call('crm.lead.fields');
             $fields = $response['result'] ?? [];
+
+            $fieldIds = [];
 
             Log::debug('Checking known listing reference fields', [
                 'company_id' => $this->company->id,
                 'known_fields' => self::KNOWN_LISTING_REF_FIELDS
             ]);
 
-            // Check known fields first (they're the fastest)
+            // Fast path: known field IDs
             foreach (self::KNOWN_LISTING_REF_FIELDS as $knownFieldId) {
                 if (isset($fields[$knownFieldId])) {
-                    $this->cache->set($cacheKey, $knownFieldId, self::CACHE_TTL_FIELDS);
-                    Log::info('Found listing reference field', [
+                    $fieldIds[] = $knownFieldId;
+                    Log::info('Found known listing reference field', [
                         'company_id' => $this->company->id,
                         'field_id' => $knownFieldId,
                         'title' => $fields[$knownFieldId]['title'] ?? 'N/A'
                     ]);
-                    return $knownFieldId;
                 }
             }
 
-            // If known fields don't exist, search through all fields
-            Log::debug('Known fields not found, searching through all fields', [
+            // Search through all fields for additional matches
+            Log::debug('Searching through all fields for reference labels', [
                 'company_id' => $this->company->id,
                 'total_fields' => count($fields)
             ]);
@@ -104,42 +104,59 @@ class ReportService
                 $formLabel = strtolower($fieldMeta['formLabel'] ?? '');
                 $listLabel = strtolower($fieldMeta['listLabel'] ?? '');
 
-                // Search for "property reference" or "listing reference"
-                if ((strpos($title, 'property') !== false && strpos($title, 'reference') !== false) ||
+                $isMatch =
+                    (strpos($title, 'property') !== false && strpos($title, 'reference') !== false) ||
                     (strpos($title, 'listing') !== false && strpos($title, 'reference') !== false) ||
                     (strpos($formLabel, 'property') !== false && strpos($formLabel, 'reference') !== false) ||
                     (strpos($formLabel, 'listing') !== false && strpos($formLabel, 'reference') !== false) ||
                     (strpos($listLabel, 'property') !== false && strpos($listLabel, 'reference') !== false) ||
-                    (strpos($listLabel, 'listing') !== false && strpos($listLabel, 'reference') !== false)) {
-                    
-                    $this->cache->set($cacheKey, $fieldId, self::CACHE_TTL_FIELDS);
-                    Log::info('Found listing reference field via search', [
+                    (strpos($listLabel, 'listing') !== false && strpos($listLabel, 'reference') !== false);
+
+                if ($isMatch) {
+                    $fieldIds[] = $fieldId;
+                    Log::info('Found reference field via search', [
                         'company_id' => $this->company->id,
                         'field_id' => $fieldId,
                         'title' => $fieldMeta['title'] ?? 'N/A',
                         'form_label' => $fieldMeta['formLabel'] ?? 'N/A',
                         'list_label' => $fieldMeta['listLabel'] ?? 'N/A'
                     ]);
-                    return $fieldId;
                 }
             }
 
-            Log::warning('No listing reference field found', [
+            $fieldIds = array_values(array_unique($fieldIds));
+
+            if (!empty($fieldIds)) {
+                $this->cache->set($cacheKey, $fieldIds, self::CACHE_TTL_FIELDS);
+                return $fieldIds;
+            }
+
+            Log::warning('No listing reference fields found', [
                 'company_id' => $this->company->id,
                 'searched_fields' => count($fields)
             ]);
-            return null;
+
+            return [];
 
         } catch (\Exception $e) {
-            Log::error('Failed to get listing reference field', [
+            Log::error('Failed to get listing reference fields', [
                 'company_id' => $this->company->id,
                 'error' => $e->getMessage()
             ]);
-            return null;
+            return [];
         }
     }
 
-    protected function getDailyKeys(string $startDate, string $endDate): array
+    /**
+     * Backward-compatible helper: returns the first matching field ID, if any.
+     */
+    public function getListingReferenceFieldId(): ?string
+    {
+        $ids = $this->getListingReferenceFieldIds();
+        return $ids[0] ?? null;
+    }
+
+protected function getDailyKeys(string $startDate, string $endDate): array
     {
         $start = Carbon::parse($startDate, 'Asia/Dubai')->startOfDay();
         $end = Carbon::parse($endDate, 'Asia/Dubai')->startOfDay();
@@ -345,13 +362,13 @@ class ReportService
      * Fetch all leads within date range with pagination.
      * Cached by day to allow partial range reuse.
      */
-    public function fetchLeads(string $startDate, string $endDate, array $selectFields = []): array
+        public function fetchLeads(string $startDate, string $endDate, array $selectFields = []): array
     {
-        $listingRefField = $this->getListingReferenceFieldId();
-        
+        $listingRefFields = $this->getListingReferenceFieldIds();
+
         Log::debug('Fetching leads', [
             'company_id' => $this->company->id,
-            'listing_ref_field' => $listingRefField,
+            'listing_ref_fields' => $listingRefFields,
             'start_date' => $startDate,
             'end_date' => $endDate
         ]);
@@ -360,11 +377,11 @@ class ReportService
             'ID', 'TITLE', 'DATE_CREATE', 'SOURCE_ID', 'STATUS_ID', 'ASSIGNED_BY_ID',
         ], $selectFields);
 
-        if ($listingRefField) {
-            $select[] = $listingRefField;
-            Log::info('Added listing reference field to selection', [
+        if (!empty($listingRefFields)) {
+            $select = array_values(array_unique(array_merge($select, $listingRefFields)));
+            Log::info('Added reference fields to selection', [
                 'company_id' => $this->company->id,
-                'field_id' => $listingRefField
+                'field_ids' => $listingRefFields
             ]);
         }
 
@@ -406,85 +423,7 @@ class ReportService
         return $allLeads;
     }
 
-    protected function fetchAndCacheLeadsRange(string $rangeStart, string $rangeEnd, array $select): array
-    {
-        $allLeads = [];
-        $start = 0;
-
-        try {
-            do {
-                Log::debug('Fetching leads batch for range', [
-                    'company_id' => $this->company->id,
-                    'range_start' => $rangeStart,
-                    'range_end' => $rangeEnd,
-                    'offset' => $start,
-                    'select_fields' => $select
-                ]);
-
-                $response = $this->client->call('crm.lead.list', [
-                    'filter' => [
-                        '>=DATE_CREATE' => Carbon::parse($rangeStart, 'Asia/Dubai')->startOfDay()->format('Y-m-d H:i:s'),
-                        '<=DATE_CREATE' => Carbon::parse($rangeEnd, 'Asia/Dubai')->endOfDay()->format('Y-m-d H:i:s'),
-                    ],
-                    'select' => $select,
-                    'order' => ['DATE_CREATE' => 'ASC'],
-                    'start' => $start,
-                ]);
-
-                $leads = $response['result'] ?? [];
-                
-                Log::debug('Leads batch received', [
-                    'company_id' => $this->company->id,
-                    'batch_count' => count($leads),
-                    'has_next' => isset($response['next'])
-                ]);
-
-                $allLeads = array_merge($allLeads, $leads);
-
-                $next = $response['next'] ?? null;
-                $start = $next;
-            } while ($next !== null);
-
-            $dayBuckets = [];
-            foreach ($allLeads as $lead) {
-                $dateValue = $lead['DATE_CREATE'] ?? null;
-                if (!$dateValue) {
-                    continue;
-                }
-
-                $day = Carbon::parse($dateValue, 'Asia/Dubai')->format('Y-m-d');
-                $key = $this->cacheKeyForDate('leads', $day);
-                $dayBuckets[$key][] = $lead;
-            }
-
-            foreach ($this->getDailyKeys($rangeStart, $rangeEnd) as $day) {
-                $cacheKey = $this->cacheKeyForDate('leads', $day);
-                $bucket = $dayBuckets[$cacheKey] ?? [];
-                $this->cache->set($cacheKey, $bucket, self::CACHE_TTL_LEADS);
-            }
-
-            Log::info('Leads range cached', [
-                'company_id' => $this->company->id,
-                'total_leads' => count($allLeads),
-                'range_start' => $rangeStart,
-                'range_end' => $rangeEnd
-            ]);
-
-        } catch (\Exception $e) {
-            Log::error('Failed to fetch leads range', [
-                'company_id' => $this->company->id,
-                'range_start' => $rangeStart,
-                'range_end' => $rangeEnd,
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
-            ]);
-            throw $e;
-        }
-
-        return $allLeads;
-    }
-
-    /**
+/**
      * Fetch all activities within date range.
      * Cached for 5 minutes.
      */
@@ -641,7 +580,7 @@ class ReportService
      * Aggregate report data from all sources.
      * Intelligent caching to minimize API calls.
      */
-    public function aggregateReport(string $startDate, string $endDate): array
+        public function aggregateReport(string $startDate, string $endDate): array
     {
         Log::info("Generating report", [
             'company_id' => $this->company->id,
@@ -653,15 +592,15 @@ class ReportService
             // Fetch all data (with caching)
             $this->reportProgress(10, 'Fetching leads');
             $leads = $this->fetchLeads($startDate, $endDate);
-            
+
             $this->reportProgress(40, 'Fetching activities');
             $activities = $this->fetchActivities($startDate, $endDate);
-            
+
             $this->reportProgress(60, 'Loading sources');
             $sources = $this->fetchLeadSources();
-            
+
             $this->reportProgress(70, 'Processing data');
-            $listingRefField = $this->getListingReferenceFieldId();
+            $listingRefFields = $this->getListingReferenceFieldIds();
 
             // Process leads
             $totalLeads = count($leads);
@@ -673,25 +612,30 @@ class ReportService
             }
             arsort($leadsBySource);
 
-            // Process listing references
+            // Process listing references from either Property Reference or Listing Reference
             $leadsByListingRef = [];
-            if ($listingRefField) {
+            if (!empty($listingRefFields)) {
                 Log::info('Processing listing reference data', [
                     'company_id' => $this->company->id,
-                    'field_id' => $listingRefField,
+                    'field_ids' => $listingRefFields,
                     'total_leads' => $totalLeads
                 ]);
 
                 foreach ($leads as $lead) {
-                    $refValue = $lead[$listingRefField] ?? null;
-                    
-                    if (!empty($refValue)) {
-                        $refValue = trim($refValue);
-                        if (!empty($refValue)) {
-                            $leadsByListingRef[$refValue] = ($leadsByListingRef[$refValue] ?? 0) + 1;
-                        } else {
-                            $leadsByListingRef['(Empty)'] = ($leadsByListingRef['(Empty)'] ?? 0) + 1;
+                    $refValue = null;
+
+                    foreach ($listingRefFields as $fieldId) {
+                        if (isset($lead[$fieldId])) {
+                            $candidate = trim((string) $lead[$fieldId]);
+                            if ($candidate !== '') {
+                                $refValue = $candidate;
+                                break;
+                            }
                         }
+                    }
+
+                    if ($refValue !== null && $refValue !== '') {
+                        $leadsByListingRef[$refValue] = ($leadsByListingRef[$refValue] ?? 0) + 1;
                     } else {
                         $leadsByListingRef['(Empty)'] = ($leadsByListingRef['(Empty)'] ?? 0) + 1;
                     }
@@ -704,7 +648,7 @@ class ReportService
                     'references' => array_keys($leadsByListingRef)
                 ]);
             } else {
-                Log::warning('Listing reference field not found, skipping listing ref data', [
+                Log::warning('Listing reference fields not found, skipping listing ref data', [
                     'company_id' => $this->company->id
                 ]);
             }
@@ -734,12 +678,12 @@ class ReportService
             $userAnalytics = $this->getUserAnalytics($leads, $activities, $usersMapping);
 
             $this->reportProgress(95, 'Finalizing');
-            
+
             $report = [
                 'total_leads' => $totalLeads,
                 'leads_by_source' => $leadsBySource,
                 'leads_by_listing_ref' => $leadsByListingRef,
-                'listing_ref_field_id' => $listingRefField,
+                'listing_ref_field_ids' => $listingRefFields,
                 'total_activities' => $totalActivities,
                 'activities_by_type' => $activitiesByType,
                 'user_analytics' => $userAnalytics,
@@ -769,7 +713,7 @@ class ReportService
         }
     }
 
-    /**
+/**
      * Get users with their activity counts and lead assignments.
      */
     public function getUserAnalytics(array $leads, array $activities, array $overrideUserNames = []): array
