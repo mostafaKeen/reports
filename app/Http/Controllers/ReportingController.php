@@ -133,11 +133,28 @@ class ReportingController extends Controller
         $endDate = Carbon::parse($request->end_date, 'Asia/Dubai')->endOfDay()->format('Y-m-d H:i:s');
 
         try {
-            // Try to get report from session first for this exact date range
-            $report = session("report:{$company->id}:{$startDate}:{$endDate}");
+            // Prefer report payload sent from the UI (the currently viewed data)
+            $report = null;
+            $payload = $request->input('report');
+            if ($payload) {
+                if (is_string($payload)) {
+                    $decoded = json_decode($payload, true);
+                } else {
+                    $decoded = $payload;
+                }
 
+                if (is_array($decoded) && !empty($decoded)) {
+                    $report = $decoded;
+                }
+            }
+
+            // Fallback to session-cached report for the exact date range
             if (!$report) {
-                // If not in session, generate fresh
+                $report = session("report:{$company->id}:{$startDate}:{$endDate}");
+            }
+
+            // As last resort, regenerate (this is the slow path)
+            if (!$report) {
                 $service = new ReportService($company);
                 $report = $service->aggregateReport($startDate, $endDate);
             }
