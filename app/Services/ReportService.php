@@ -83,23 +83,129 @@ class ReportService
         }
     }
 
+    protected function getDailyKeys(string $startDate, string $endDate): array
+    {
+        $start = Carbon::parse($startDate, 'Asia/Dubai')->startOfDay();
+        $end = Carbon::parse($endDate, 'Asia/Dubai')->startOfDay();
+        $days = [];
+
+        while ($start->lte($end)) {
+            $days[] = $start->format('Y-m-d');
+            $start->addDay();
+        }
+
+        return $days;
+    }
+
+    protected function buildMissingRanges(array $days): array
+    {
+        sort($days);
+        $ranges = [];
+        $rangeStart = null;
+        $rangeEnd = null;
+
+        foreach ($days as $day) {
+            if ($rangeStart === null) {
+                $rangeStart = $day;
+                $rangeEnd = $day;
+                continue;
+            }
+
+            $nextDay = Carbon::parse($rangeEnd, 'Asia/Dubai')->addDay()->format('Y-m-d');
+            if ($day === $nextDay) {
+                $rangeEnd = $day;
+                continue;
+            }
+
+            $ranges[] = [$rangeStart, $rangeEnd];
+            $rangeStart = $day;
+            $rangeEnd = $day;
+        }
+
+        if ($rangeStart !== null) {
+            $ranges[] = [$rangeStart, $rangeEnd];
+        }
+
+        return $ranges;
+    }
+
+    protected function getUserNameMap(array $userIds): array
+    {
+        $userIds = array_values(array_filter(array_unique($userIds), function ($id) {
+            return $id !== null && $id !== '';
+        }));
+
+        if (empty($userIds)) {
+            return [];
+        }
+
+        $cacheKey = 'user_names';
+        $cached = $this->cache->get($cacheKey) ?? [];
+        $cachedIds = array_map('strval', array_keys($cached));
+        $missingIds = array_values(array_filter($userIds, fn($id) => !in_array((string) $id, $cachedIds, true)));
+
+        if (!empty($missingIds)) {
+            $fresh = $this->fetchUsersByIds($missingIds);
+            $cached = array_merge($cached, $fresh);
+            $this->cache->set($cacheKey, $cached, self::CACHE_TTL_SOURCES);
+        }
+
+        $result = [];
+        foreach ($userIds as $id) {
+            if (isset($cached[$id])) {
+                $result[$id] = $cached[$id];
+            } else {
+                $result[$id] = "User #{$id}";
+            }
+        }
+
+        return $result;
+    }
+
+    protected function fetchUsersByIds(array $userIds): array
+    {
+        $userMap = [];
+        $chunkSize = 50;
+        $chunks = array_chunk($userIds, $chunkSize);
+
+        foreach ($chunks as $chunk) {
+            $start = 0;
+            do {
+                $response = $this->client->call('user.get', [
+                    'filter' => ['ID' => $chunk],
+                    'select' => ['ID', 'NAME', 'LAST_NAME', 'EMAIL'],
+                    'order' => ['ID' => 'ASC'],
+                    'start' => $start,
+                ]);
+
+                foreach (($response['result'] ?? []) as $user) {
+                    $id = $user['ID'] ?? null;
+                    if ($id === null) {
+                        continue;
+                    }
+
+                    $fullName = trim(($user['NAME'] ?? '') . ' ' . ($user['LAST_NAME'] ?? '')) ?: ($user['EMAIL'] ?? "User #{$id}");
+                    $userMap[$id] = $fullName;
+                }
+
+                $start = $response['next'] ?? null;
+            } while ($start !== null);
+        }
+
+        return $userMap;
+    }
+
+    protected function cacheKeyForDate(string $type, string $date): string
+    {
+        return "{$type}:date:{$date}";
+    }
+
     /**
      * Fetch all leads within date range with pagination.
-     * Cached for 5 minutes.
+     * Cached by day to allow partial range reuse.
      */
     public function fetchLeads(string $startDate, string $endDate, array $selectFields = []): array
     {
-        $cacheKey = "leads:" . md5("{$startDate}_{$endDate}");
-        $cached = $this->cache->get($cacheKey);
-
-        if ($cached !== null) {
-            Log::debug("Using cached leads", [
-                'company_id' => $this->company->id,
-                'count' => count($cached)
-            ]);
-            return $cached;
-        }
-
         $listingRefField = $this->getListingReferenceFieldId();
         $select = array_merge([
             'ID', 'TITLE', 'DATE_CREATE', 'SOURCE_ID', 'STATUS_ID', 'ASSIGNED_BY_ID',
@@ -110,19 +216,64 @@ class ReportService
         }
 
         $allLeads = [];
+        $days = $this->getDailyKeys($startDate, $endDate);
+        $cachedLeads = [];
+        $missingDays = [];
+
+        foreach ($days as $day) {
+            $dayCache = $this->cache->get($this->cacheKeyForDate('leads', $day));
+            if ($dayCache !== null) {
+                $cachedLeads = array_merge($cachedLeads, $dayCache);
+            } else {
+                $missingDays[] = $day;
+            }
+        }
+
+        if (!empty($missingDays)) {
+            $ranges = $this->buildMissingRanges($missingDays);
+            foreach ($ranges as [$rangeStart, $rangeEnd]) {
+                $this->reportProgress(20, "Fetching leads {$rangeStart} to {$rangeEnd}");
+                $this->fetchAndCacheLeadsRange($rangeStart, $rangeEnd, $select);
+            }
+
+            foreach ($missingDays as $day) {
+                $dayCache = $this->cache->get($this->cacheKeyForDate('leads', $day));
+                if ($dayCache !== null) {
+                    $cachedLeads = array_merge($cachedLeads, $dayCache);
+                }
+            }
+        }
+
+        $allLeads = $cachedLeads;
+
+        Log::info('Leads fetched successfully', [
+            'company_id' => $this->company->id,
+            'total_leads' => count($allLeads),
+            'cached_days' => count($days) - count($missingDays),
+            'refreshed_days' => count($missingDays),
+        ]);
+
+        return $allLeads;
+    }
+
+    protected function fetchAndCacheLeadsRange(string $rangeStart, string $rangeEnd, array $select): void
+    {
+        $allLeads = [];
         $start = 0;
 
         try {
             do {
-                Log::debug("Fetching leads batch", [
+                Log::debug('Fetching leads batch for range', [
                     'company_id' => $this->company->id,
-                    'offset' => $start
+                    'range_start' => $rangeStart,
+                    'range_end' => $rangeEnd,
+                    'offset' => $start,
                 ]);
 
                 $response = $this->client->call('crm.lead.list', [
                     'filter' => [
-                        '>=DATE_CREATE' => $startDate,
-                        '<=DATE_CREATE' => $endDate,
+                        '>=DATE_CREATE' => Carbon::parse($rangeStart, 'Asia/Dubai')->startOfDay()->toIso8601String(),
+                        '<=DATE_CREATE' => Carbon::parse($rangeEnd, 'Asia/Dubai')->endOfDay()->toIso8601String(),
                     ],
                     'select' => $select,
                     'order' => ['DATE_CREATE' => 'ASC'],
@@ -136,19 +287,29 @@ class ReportService
                 $start = $next;
             } while ($next !== null);
 
-            $this->cache->set($cacheKey, $allLeads, self::CACHE_TTL_LEADS);
+            $dayBuckets = [];
+            foreach ($allLeads as $lead) {
+                $dateValue = $lead['DATE_CREATE'] ?? null;
+                if (!$dateValue) {
+                    continue;
+                }
 
-            Log::info("Leads fetched successfully", [
-                'company_id' => $this->company->id,
-                'total_leads' => count($allLeads)
-            ]);
+                $day = Carbon::parse($dateValue, 'Asia/Dubai')->format('Y-m-d');
+                $key = $this->cacheKeyForDate('leads', $day);
+                $dayBuckets[$key][] = $lead;
+            }
 
-            return $allLeads;
-
+            foreach ($this->getDailyKeys($rangeStart, $rangeEnd) as $day) {
+                $cacheKey = $this->cacheKeyForDate('leads', $day);
+                $bucket = $dayBuckets[$cacheKey] ?? [];
+                $this->cache->set($cacheKey, $bucket, self::CACHE_TTL_LEADS);
+            }
         } catch (\Exception $e) {
-            Log::error("Failed to fetch leads", [
+            Log::error('Failed to fetch leads range', [
                 'company_id' => $this->company->id,
-                'error' => $e->getMessage()
+                'range_start' => $rangeStart,
+                'range_end' => $rangeEnd,
+                'error' => $e->getMessage(),
             ]);
             throw $e;
         }
@@ -160,31 +321,65 @@ class ReportService
      */
     public function fetchActivities(string $startDate, string $endDate): array
     {
-        $cacheKey = "activities:" . md5("{$startDate}_{$endDate}");
-        $cached = $this->cache->get($cacheKey);
+        $allActivities = [];
+        $days = $this->getDailyKeys($startDate, $endDate);
+        $cachedActivities = [];
+        $missingDays = [];
 
-        if ($cached !== null) {
-            Log::debug("Using cached activities", [
-                'company_id' => $this->company->id,
-                'count' => count($cached)
-            ]);
-            return $cached;
+        foreach ($days as $day) {
+            $dayCache = $this->cache->get($this->cacheKeyForDate('activities', $day));
+            if ($dayCache !== null) {
+                $cachedActivities = array_merge($cachedActivities, $dayCache);
+            } else {
+                $missingDays[] = $day;
+            }
         }
 
+        if (!empty($missingDays)) {
+            $ranges = $this->buildMissingRanges($missingDays);
+            foreach ($ranges as [$rangeStart, $rangeEnd]) {
+                $this->reportProgress(45, "Fetching activities {$rangeStart} to {$rangeEnd}");
+                $this->fetchAndCacheActivitiesRange($rangeStart, $rangeEnd);
+            }
+
+            foreach ($missingDays as $day) {
+                $dayCache = $this->cache->get($this->cacheKeyForDate('activities', $day));
+                if ($dayCache !== null) {
+                    $cachedActivities = array_merge($cachedActivities, $dayCache);
+                }
+            }
+        }
+
+        $allActivities = $cachedActivities;
+
+        Log::info('Activities fetched successfully', [
+            'company_id' => $this->company->id,
+            'total_activities' => count($allActivities),
+            'cached_days' => count($days) - count($missingDays),
+            'refreshed_days' => count($missingDays),
+        ]);
+
+        return $allActivities;
+    }
+
+    protected function fetchAndCacheActivitiesRange(string $rangeStart, string $rangeEnd): void
+    {
         $allActivities = [];
         $start = 0;
 
         try {
             do {
-                Log::debug("Fetching activities batch", [
+                Log::debug('Fetching activities batch for range', [
                     'company_id' => $this->company->id,
-                    'offset' => $start
+                    'range_start' => $rangeStart,
+                    'range_end' => $rangeEnd,
+                    'offset' => $start,
                 ]);
 
                 $response = $this->client->call('crm.activity.list', [
                     'filter' => [
-                        '>=CREATED' => $startDate,
-                        '<=CREATED' => $endDate,
+                        '>=CREATED' => Carbon::parse($rangeStart, 'Asia/Dubai')->startOfDay()->toIso8601String(),
+                        '<=CREATED' => Carbon::parse($rangeEnd, 'Asia/Dubai')->endOfDay()->toIso8601String(),
                     ],
                     'select' => [
                         'ID', 'SUBJECT', 'TYPE_ID', 'OWNER_ID', 'OWNER_TYPE_ID',
@@ -201,19 +396,29 @@ class ReportService
                 $start = $next;
             } while ($next !== null);
 
-            $this->cache->set($cacheKey, $allActivities, self::CACHE_TTL_ACTIVITIES);
+            $dayBuckets = [];
+            foreach ($allActivities as $activity) {
+                $dateValue = $activity['CREATED'] ?? null;
+                if (!$dateValue) {
+                    continue;
+                }
 
-            Log::info("Activities fetched successfully", [
-                'company_id' => $this->company->id,
-                'total_activities' => count($allActivities)
-            ]);
+                $day = Carbon::parse($dateValue, 'Asia/Dubai')->format('Y-m-d');
+                $key = $this->cacheKeyForDate('activities', $day);
+                $dayBuckets[$key][] = $activity;
+            }
 
-            return $allActivities;
-
+            foreach ($this->getDailyKeys($rangeStart, $rangeEnd) as $day) {
+                $cacheKey = $this->cacheKeyForDate('activities', $day);
+                $bucket = $dayBuckets[$cacheKey] ?? [];
+                $this->cache->set($cacheKey, $bucket, self::CACHE_TTL_ACTIVITIES);
+            }
         } catch (\Exception $e) {
-            Log::error("Failed to fetch activities", [
+            Log::error('Failed to fetch activities range', [
                 'company_id' => $this->company->id,
-                'error' => $e->getMessage()
+                'range_start' => $rangeStart,
+                'range_end' => $rangeEnd,
+                'error' => $e->getMessage(),
             ]);
             throw $e;
         }
@@ -429,10 +634,12 @@ class ReportService
         // Merge user data
         $users = [];
         $allUserIds = array_unique(array_merge(array_keys($userActivities), array_keys($userLeads)));
+        $userNames = $this->getUserNameMap($allUserIds);
 
         foreach ($allUserIds as $userId) {
             $users[$userId] = [
                 'user_id' => $userId,
+                'user_name' => $userNames[$userId] ?? "User #{$userId}",
                 'total_leads' => $userLeads[$userId] ?? 0,
                 'total_activities' => $userActivities[$userId]['total_activities'] ?? 0,
                 'activities_by_type' => $userActivities[$userId]['activities_by_type'] ?? [],

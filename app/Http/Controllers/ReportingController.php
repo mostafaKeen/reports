@@ -70,10 +70,10 @@ class ReportingController extends Controller
             // Generate report
             $report = $service->aggregateReport($startDate, $endDate);
 
-            // Store in session for CSV export
+            // Store in session for CSV export with the specific date range
             session([
-                "report:{$company->id}" => $report,
-                "report_time:{$company->id}" => now(),
+                "report:{$company->id}:{$startDate}:{$endDate}" => $report,
+                "report_time:{$company->id}:{$startDate}:{$endDate}" => now(),
             ]);
 
             return response()->json([
@@ -133,8 +133,8 @@ class ReportingController extends Controller
         $endDate = Carbon::parse($request->end_date, 'Asia/Dubai')->endOfDay()->toIso8601String();
 
         try {
-            // Try to get report from session first
-            $report = session("report:{$company->id}");
+            // Try to get report from session first for this exact date range
+            $report = session("report:{$company->id}:{$startDate}:{$endDate}");
 
             if (!$report) {
                 // If not in session, generate fresh
@@ -196,7 +196,7 @@ class ReportingController extends Controller
                             $actSummary[] = "{$type}: {$count}";
                         }
                         fputcsv($file, [
-                            $user['user_id'],
+                            $user['user_name'] ?? "User #{$user['user_id']}",
                             $user['total_leads'],
                             $user['total_activities'],
                             implode('; ', $actSummary),

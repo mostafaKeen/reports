@@ -319,6 +319,25 @@
             showState('loading');
             updateProgress(5, 'Starting request');
 
+            const cacheKey = `report:${currentCompanyId}:${startDate}:${endDate}`;
+            const localCache = localStorage.getItem(cacheKey);
+            const localTimestamp = localStorage.getItem(`${cacheKey}:timestamp`);
+
+            if (!forceRefresh && localCache) {
+                try {
+                    const cachedData = JSON.parse(localCache);
+                    lastReportData = cachedData;
+                    updateProgress(70, 'Using cached report');
+                    renderReport(cachedData);
+                    updateProgress(100, 'Done');
+                    showState('content');
+                    document.getElementById('btn-export').disabled = false;
+                    return;
+                } catch (err) {
+                    console.warn('Failed to parse cached report, refetching', err);
+                }
+            }
+
             try {
                 const params = new URLSearchParams({
                     start_date: startDate,
@@ -339,7 +358,6 @@
                 lastReportData = json.data;
                 
                 // Store in localStorage with timestamp
-                const cacheKey = `report:${currentCompanyId}:${startDate}:${endDate}`;
                 localStorage.setItem(cacheKey, JSON.stringify(json.data));
                 localStorage.setItem(`${cacheKey}:timestamp`, new Date().getTime());
 
@@ -385,8 +403,13 @@
                         btn.innerHTML = `<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg> Refresh`;
                         btn.disabled = false;
                     }, 1500);
-                    // Re-fetch if report was already generated
-                    if (lastReportData) fetchReport();
+
+                    const cacheKey = `report:${currentCompanyId}:${document.getElementById('start-date').value}:${document.getElementById('end-date').value}`;
+                    localStorage.removeItem(cacheKey);
+                    localStorage.removeItem(`${cacheKey}:timestamp`);
+
+                    // Re-fetch if report was already generated using fresh server data
+                    if (lastReportData) fetchReport(true);
                 }
             } catch (err) {
                 console.error('Cache clear error:', err);
@@ -608,7 +631,7 @@
                             <div class="flex items-center gap-2">
                                 <div class="w-3 h-3 rounded-full" style="background:${CHART_COLORS[colorIdx]}"></div>
                                 <div>
-                                    <p class="font-semibold text-slate-200">User #${escapeHtml(user.user_id)}</p>
+                                    <p class="font-semibold text-slate-200">${escapeHtml(user.user_name || `User #${user.user_id}`)}</p>
                                     <p class="text-xs text-slate-500">Total Activities: <strong class="text-slate-300">${user.total_activities}</strong></p>
                                 </div>
                             </div>
