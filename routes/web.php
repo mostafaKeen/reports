@@ -38,3 +38,19 @@ Route::get('/report/{company}', [ReportingController::class, 'show'])->name('rep
 Route::get('/report/{company}/data', [ReportingController::class, 'fetchData'])->name('report.data');
 Route::post('/report/{company}/clear-cache', [ReportingController::class, 'clearCache'])->name('report.clearCache');
 Route::get('/report/{company}/export', [ReportingController::class, 'exportCsv'])->name('report.export');
+use App\Http\Controllers\ChatController;
+ 
+// ══════════════════════════════════════════════════════════════════════════════
+// CRM AI Chat Routes (Add to your routes/web.php)
+// ══════════════════════════════════════════════════════════════════════════════
+ 
+// Main chat endpoint - Send a question to the AI assistant
+Route::post('/crm-chat', [ChatController::class, 'sendMessage'])
+    ->name('crm.chat')
+    ->middleware('throttle:30,1'); // Rate limit: 30 requests per minute
+ 
+// Analyze endpoint - Get AI insights about report data
+Route::post('/crm-chat/analyze', [ChatController::class, 'analyzeReport'])
+    ->name('crm.chat.analyze')
+    ->middleware('throttle:20,1'); // Rate limit: 20 requests per minute
+ 

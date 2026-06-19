@@ -32,6 +32,53 @@
         .fade-in { animation: fadeIn 0.4s ease-out forwards; }
         .spinner { border: 3px solid rgba(255,255,255,0.1); border-top: 3px solid #818cf8; border-radius: 50%; width: 24px; height: 24px; animation: spin 0.8s linear infinite; }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        
+        /* AI Chat Enhancements */
+        @keyframes slideUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes slideDown { from { opacity: 0; transform: translateY(-20px); } to { opacity: 1; transform: translateY(0); } }
+        .chat-slide-up { animation: slideUp 0.3s ease-out forwards; }
+        .chat-slide-down { animation: slideDown 0.3s ease-out forwards; }
+        
+        @keyframes pulse-soft {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+        .animate-pulse-soft { animation: pulse-soft 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+        
+        .ai-message {
+            background: rgba(30, 41, 59, 0.6);
+            border: 1px solid rgba(129, 140, 248, 0.2);
+            backdrop-filter: blur(12px);
+        }
+        
+        .user-message {
+            background: linear-gradient(135deg, rgba(99, 102, 241, 0.8), rgba(139, 92, 246, 0.8));
+            border: 1px solid rgba(129, 140, 248, 0.4);
+        }
+        
+        .chat-input-focus:focus {
+            border-color: #6366f1;
+            box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+        }
+        
+        /* Scrollbar styling */
+        .chat-history::-webkit-scrollbar {
+            width: 6px;
+        }
+        
+        .chat-history::-webkit-scrollbar-track {
+            background: rgba(15, 23, 42, 0.4);
+            border-radius: 10px;
+        }
+        
+        .chat-history::-webkit-scrollbar-thumb {
+            background: rgba(99, 102, 241, 0.5);
+            border-radius: 10px;
+        }
+        
+        .chat-history::-webkit-scrollbar-thumb:hover {
+            background: rgba(99, 102, 241, 0.7);
+        }
     </style>
 </head>
 <body class="h-full font-sans antialiased overflow-x-hidden">
@@ -272,6 +319,90 @@
         </div>
     </div>
 
+    <!-- ═══════════════════════════════════════════════════════════════════════════════ -->
+    <!-- ENHANCED AI CHAT MODAL - Matches Dashboard Design -->
+    <!-- ═══════════════════════════════════════════════════════════════════════════════ -->
+    
+    <!-- Chat Modal Backdrop -->
+    <div id="ai-chat-backdrop" class="fixed inset-0 bg-black/40 backdrop-blur-sm hidden z-40 transition-opacity duration-300"></div>
+
+    <!-- Chat Modal -->
+    <div id="ai-chat-modal" class="fixed bottom-0 right-0 h-screen sm:h-auto sm:bottom-6 sm:right-6 sm:w-96 sm:max-h-[600px] rounded-t-3xl sm:rounded-2xl shadow-2xl glass hidden z-50 flex flex-col transition-all duration-300 chat-slide-up">
+        
+        <!-- Modal Header -->
+        <div class="bg-gradient-to-r from-indigo-600/80 to-purple-600/80 backdrop-blur-md rounded-t-3xl sm:rounded-t-2xl p-4 flex items-center justify-between border-b border-indigo-500/20">
+            <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-full bg-gradient-to-br from-indigo-400 to-purple-500 flex items-center justify-center shadow-lg">
+                    <svg class="w-6 h-6 text-white" fill="currentColor" viewBox="0 0 20 20">
+                        <path d="M2 11a1 1 0 011-1h2a1 1 0 011 1v5a1 1 0 01-1 1H3a1 1 0 01-1-1v-5zM8 7a1 1 0 011-1h2a1 1 0 011 1v9a1 1 0 01-1 1H9a1 1 0 01-1-1V7zM14 4a1 1 0 011-1h2a1 1 0 011 1v12a1 1 0 01-1 1h-2a1 1 0 01-1-1V4z"/>
+                    </svg>
+                </div>
+                <div>
+                    <h2 class="text-sm font-bold text-white">CRM AI Assistant</h2>
+                    <p class="text-xs text-indigo-200">Powered by Google Gemini</p>
+                </div>
+            </div>
+            <button type="button" onclick="closeAiChat()" class="p-2 hover:bg-white/10 rounded-lg transition-colors text-white">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                </svg>
+            </button>
+        </div>
+
+        <!-- Chat History -->
+        <div id="ai-chat-history" class="chat-history flex-1 overflow-y-auto p-4 space-y-4 bg-slate-950/40">
+            <div class="flex justify-center py-8">
+                <div class="text-center">
+                    <div class="w-12 h-12 rounded-full bg-gradient-to-br from-indigo-500/20 to-purple-500/20 flex items-center justify-center mx-auto mb-3">
+                        <svg class="w-6 h-6 text-indigo-400" fill="currentColor" viewBox="0 0 20 20">
+                            <path d="M2 11a1 1 0 011-1h2a1 1 0 011 1v5a1 1 0 01-1 1H3a1 1 0 01-1-1v-5zM8 7a1 1 0 011-1h2a1 1 0 011 1v9a1 1 0 01-1 1H9a1 1 0 01-1-1V7zM14 4a1 1 0 011-1h2a1 1 0 011 1v12a1 1 0 01-1 1h-2a1 1 0 01-1-1V4z"/>
+                        </svg>
+                    </div>
+                    <p class="text-slate-400 text-xs font-medium">Ask about leads, activities, or performance</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Chat Loading Indicator -->
+        <div id="ai-chat-loading" class="hidden px-4 py-3 flex items-center justify-center gap-2">
+            <div class="flex gap-1">
+                <div class="w-2 h-2 rounded-full bg-indigo-400 animate-pulse-soft"></div>
+                <div class="w-2 h-2 rounded-full bg-purple-400 animate-pulse-soft" style="animation-delay: 0.2s"></div>
+                <div class="w-2 h-2 rounded-full bg-pink-400 animate-pulse-soft" style="animation-delay: 0.4s"></div>
+            </div>
+        </div>
+
+        <!-- Chat Input Form -->
+        <form id="ai-chat-form" class="border-t border-slate-800/40 p-4 bg-slate-900/30 rounded-b-3xl sm:rounded-b-2xl flex gap-2">
+            <textarea 
+                name="question" 
+                id="ai-question" 
+                rows="1" 
+                maxlength="2000"
+                required 
+                class="flex-1 p-3 bg-slate-900/60 border border-slate-800 rounded-xl text-sm text-slate-100 placeholder-slate-500 focus:outline-none chat-input-focus transition-all resize-none"
+                placeholder="Ask something...">
+            </textarea>
+            <button type="submit" class="px-4 py-3 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white rounded-xl font-semibold transition-all shadow-lg shadow-indigo-500/30 hover:shadow-indigo-500/50 flex items-center justify-center flex-shrink-0">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8m0 8l-4-4m4 4l4-4"/>
+                </svg>
+            </button>
+        </form>
+    </div>
+
+    <!-- AI Chat Trigger Button - Fixed Position -->
+    <button 
+        type="button" 
+        onclick="openAiChat()" 
+        id="ai-chat-trigger"
+        class="fixed bottom-6 right-6 w-14 h-14 rounded-full bg-gradient-to-br from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white shadow-2xl shadow-indigo-600/40 hover:shadow-indigo-600/60 font-semibold transition-all transform hover:scale-110 flex items-center justify-center z-30"
+        title="Open AI Chat">
+        <svg class="w-7 h-7" fill="currentColor" viewBox="0 0 24 24">
+            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm3.5-9c.83 0 1.5-.67 1.5-1.5S16.33 8 15.5 8 14 8.67 14 9.5s.67 1.5 1.5 1.5zm-7 0c.83 0 1.5-.67 1.5-1.5S9.33 8 8.5 8 7 8.67 7 9.5 7.67 11 8.5 11zm3.5 6.5c2.33 0 4.31-1.46 5.11-3.5H6.89c.8 2.04 2.78 3.5 5.11 3.5z"/>
+        </svg>
+    </button>
+
     <!-- ═══════════════════ JAVASCRIPT ═══════════════════ -->
     <script>
         const CSRF_TOKEN = '{{ csrf_token() }}';
@@ -280,6 +411,7 @@
         let chartLeadsSource = null;
         let chartActivitiesType = null;
         let lastReportData = null;
+        let isChatLoading = false;
 
         // Color palette for charts
         const CHART_COLORS = [
@@ -379,46 +511,6 @@
             document.getElementById('loading-percent').textContent = `${clamped}%`;
             document.getElementById('loading-stage').textContent = stage;
             document.getElementById('loading-text').textContent = `${stage}...`;
-        }
-
-        // Clear cache
-        async function clearCache() {
-            const btn = document.getElementById('btn-clear-cache');
-            btn.disabled = true;
-            btn.innerHTML = '<div class="spinner" style="width:16px;height:16px;border-width:2px;"></div> Clearing...';
-
-            try {
-                const res = await fetch(`/report/${currentCompanyId}/clear-cache`, {
-                    method: 'POST',
-                    headers: {
-                        'X-CSRF-TOKEN': CSRF_TOKEN,
-                        'Accept': 'application/json',
-                    },
-                });
-                const json = await res.json();
-
-                if (json.success) {
-                    btn.innerHTML = '✓ Cleared!';
-                    setTimeout(() => {
-                        btn.innerHTML = `<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg> Refresh`;
-                        btn.disabled = false;
-                    }, 1500);
-
-                    const cacheKey = `report:${currentCompanyId}:${document.getElementById('start-date').value}:${document.getElementById('end-date').value}`;
-                    localStorage.removeItem(cacheKey);
-                    localStorage.removeItem(`${cacheKey}:timestamp`);
-
-                    // Re-fetch if report was already generated using fresh server data
-                    if (lastReportData) fetchReport(true);
-                }
-            } catch (err) {
-                console.error('Cache clear error:', err);
-                btn.innerHTML = 'Error';
-                setTimeout(() => {
-                    btn.innerHTML = `<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg> Refresh`;
-                    btn.disabled = false;
-                }, 2000);
-            }
         }
 
         // Export CSV
@@ -727,7 +819,6 @@
 
         function formatListingRefLabel(value) {
             if (value === null || value === undefined || value === '') return 'Unspecified';
-            if (value === '(Empty)') return 'Unspecified';
             return String(value);
         }
 
@@ -740,77 +831,123 @@
         // Auto-load report on page load if in Bitrix24 context
         document.addEventListener('DOMContentLoaded', function() {
             if (IS_BITRIX_CONTEXT) {
-                // Small delay to ensure Bitrix24 SDK is ready
                 setTimeout(() => fetchReport(false), 500);
             }
         });
-    </script>
-<!-- AI Chat Bot Modal -->
-<div id="ai-chat-modal" class="fixed inset-0 flex items-center justify-center bg-black bg-opacity-50 hidden">
-    <div class="bg-white dark:bg-gray-800 rounded-lg shadow-lg w-full max-w-md mx-4 p-4">
-        <div class="flex justify-between items-center mb-2">
-            <h2 class="text-xl font-semibold text-gray-800 dark:text-gray-200">CRM AI Assistant</h2>
-            <button type="button" onclick="document.getElementById('ai-chat-modal').classList.add('hidden')" class="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200">✕</button>
-        </div>
-        <div id="ai-chat-history" class="h-64 overflow-y-auto mb-2 p-2 border rounded bg-gray-50 dark:bg-gray-900">
-            <!-- Conversation will appear here -->
-        </div>
-        <form id="ai-chat-form" class="flex gap-2">
-            <textarea name="question" id="ai-question" rows="1" maxlength="1000" required class="flex-1 p-2 border rounded resize-none focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Ask a CRM question..."></textarea>
-            <button type="submit" class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 focus:outline-none">Send</button>
-        </form>
-    </div>
-</div>
 
-<!-- Trigger button -->
-<button type="button" onclick="document.getElementById('ai-chat-modal').classList.remove('hidden')" class="mt-4 px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 focus:outline-none">AI Chat</button>
+        // ═══════════════════════════════════════════════════════════════════════════════
+        // ENHANCED AI CHAT FUNCTIONS
+        // ═══════════════════════════════════════════════════════════════════════════════
 
-<script>
-    (function(){
-        const form = document.getElementById('ai-chat-form');
-        const historyEl = document.getElementById('ai-chat-history');
-        const csrf = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || CSRF_TOKEN;
-        function appendMessage(author, text){
-            const div = document.createElement('div');
-            div.className = author === 'user' ? 'text-right mb-2' : 'text-left mb-2';
-            const span = document.createElement('span');
-            span.className = author === 'user' ? 'inline-block bg-blue-500 text-white rounded px-3 py-1' : 'inline-block bg-gray-300 dark:bg-gray-700 text-gray-800 dark:text-gray-200 rounded px-3 py-1';
-            span.textContent = text;
-            div.appendChild(span);
-            historyEl.appendChild(div);
-            historyEl.scrollTop = historyEl.scrollHeight;
+        function openAiChat() {
+            const modal = document.getElementById('ai-chat-modal');
+            const backdrop = document.getElementById('ai-chat-backdrop');
+            modal.classList.remove('hidden');
+            backdrop.classList.remove('hidden');
+            document.getElementById('ai-question').focus();
+            document.body.style.overflow = 'hidden';
         }
-        form.addEventListener('submit', async function(e){
+
+        function closeAiChat() {
+            const modal = document.getElementById('ai-chat-modal');
+            const backdrop = document.getElementById('ai-chat-backdrop');
+            modal.classList.add('hidden');
+            backdrop.classList.add('hidden');
+            document.body.style.overflow = '';
+        }
+
+        // Close on Escape key
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') {
+                closeAiChat();
+            }
+        });
+
+        // Close on backdrop click
+        document.getElementById('ai-chat-backdrop')?.addEventListener('click', function() {
+            closeAiChat();
+        });
+
+        // Prevent modal close when clicking inside
+        document.getElementById('ai-chat-modal')?.addEventListener('click', function(e) {
+            e.stopPropagation();
+        });
+
+        // Append message to chat history
+        function appendMessage(author, text) {
+            const history = document.getElementById('ai-chat-history');
+            const div = document.createElement('div');
+            div.className = author === 'user' 
+                ? 'flex justify-end chat-slide-up' 
+                : 'flex justify-start chat-slide-up';
+            
+            const messageDiv = document.createElement('div');
+            messageDiv.className = author === 'user' 
+                ? 'user-message rounded-2xl px-4 py-3 max-w-xs text-sm'
+                : 'ai-message rounded-2xl px-4 py-3 max-w-xs text-sm';
+            
+            messageDiv.innerHTML = text.replace(/\n/g, '<br>');
+            div.appendChild(messageDiv);
+            history.appendChild(div);
+            history.scrollTop = history.scrollHeight;
+        }
+
+        // Handle form submission
+        document.getElementById('ai-chat-form')?.addEventListener('submit', async function(e) {
             e.preventDefault();
+            
+            if (isChatLoading) return;
+            
             const question = document.getElementById('ai-question').value.trim();
-            if(!question) return;
-            appendMessage('user', question);
-            document.getElementById('ai-question').value='';
-            // loading placeholder
-            appendMessage('bot', '…');
+            if (!question) {
+                alert('Please ask a question');
+                return;
+            }
+
+            // Get company ID
+            const companyId = currentCompanyId;
+
+            // Add user message
+            appendMessage('user', escapeHtml(question));
+            document.getElementById('ai-question').value = '';
+            isChatLoading = true;
+
+            // Show loading indicator
+            document.getElementById('ai-chat-loading').classList.remove('hidden');
+
             try {
-                const res = await fetch('/crm-chat', {
+                const response = await fetch('/crm-chat', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
-                        'X-CSRF-TOKEN': csrf,
+                        'X-CSRF-TOKEN': CSRF_TOKEN,
                         'Accept': 'application/json'
                     },
-                    body: JSON.stringify({question})
+                    body: JSON.stringify({
+                        question: question,
+                        company_id: companyId
+                    })
                 });
-                const data = await res.json();
-                // remove loading placeholder
-                historyEl.removeChild(historyEl.lastChild);
-                if(res.ok){
-                    appendMessage('bot', data.answer);
+
+                // Hide loading indicator
+                document.getElementById('ai-chat-loading').classList.add('hidden');
+
+                const data = await response.json();
+
+                if (response.ok && data.success) {
+                    appendMessage('bot', escapeHtml(data.answer));
                 } else {
-                    appendMessage('bot', data.error || 'Error');
+                    appendMessage('bot', `<strong>Error:</strong> ${escapeHtml(data.error || 'Failed to get response')}`);
                 }
-            } catch(err){
-                historyEl.removeChild(historyEl.lastChild);
-                appendMessage('bot', 'Network error');
+            } catch (err) {
+                document.getElementById('ai-chat-loading').classList.add('hidden');
+                appendMessage('bot', `<strong>Error:</strong> ${escapeHtml(err.message || 'Network error')}`);
+                console.error('Chat error:', err);
+            } finally {
+                isChatLoading = false;
+                document.getElementById('ai-question').focus();
             }
         });
-    })();
-</script>
+    </script>
+</body>
 </html>
