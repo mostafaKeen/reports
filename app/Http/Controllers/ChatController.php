@@ -71,8 +71,20 @@ class ChatController extends Controller
 
             $history = $chatSession->history ?: [];
 
-            // Get the Gemini service
+            // Get the Gemini service with BitrixClient attached for live API calls
             $gemini = new GeminiService($company->bitrix_api_key);
+            
+            // Attach BitrixClient so the AI can call Bitrix24 REST API via function calling
+            try {
+                $bitrixClient = new BitrixClient($company);
+                $gemini->setBitrixClient($bitrixClient);
+            } catch (\Exception $e) {
+                Log::warning('Could not attach BitrixClient to GeminiService', [
+                    'company_id' => $company->id,
+                    'error' => $e->getMessage(),
+                ]);
+                // Continue without function calling — the AI will still work with context data
+            }
 
             // Build context for better responses
             $context = $this->buildContext($company, $request);
