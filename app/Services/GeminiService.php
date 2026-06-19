@@ -8,8 +8,8 @@ use Illuminate\Support\Facades\Http;
 class GeminiService
 {
     private $apiKey;
-    private const API_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
-    private const MODEL = 'gemini-2.0-flash';
+    private const API_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent';
+    private const MODEL = 'gemini-flash-latest';
 
     public function __construct(string $apiKey)
     {
@@ -72,12 +72,15 @@ class GeminiService
             ];
 
             Log::info('Gemini API Request', [
-                'endpoint' => self::API_ENDPOINT . '?key=***' . substr($this->apiKey, -5),
+                'endpoint' => self::API_ENDPOINT,
                 'payload' => $payload,
             ]);
 
             $response = Http::timeout(30)
-                ->post(self::API_ENDPOINT . '?key=' . urlencode($this->apiKey), $payload);
+                ->withHeaders([
+                    'X-goog-api-key' => $this->apiKey,
+                ])
+                ->post(self::API_ENDPOINT, $payload);
 
             Log::info('Gemini API Response', [
                 'status' => $response->status(),
@@ -146,12 +149,15 @@ EOT;
             ];
 
             Log::info('Gemini API Data Analysis Request', [
-                'endpoint' => self::API_ENDPOINT . '?key=***' . substr($this->apiKey, -5),
+                'endpoint' => self::API_ENDPOINT,
                 'payload' => $payload,
             ]);
 
             $response = Http::timeout(30)
-                ->post(self::API_ENDPOINT . '?key=' . urlencode($this->apiKey), $payload);
+                ->withHeaders([
+                    'X-goog-api-key' => $this->apiKey,
+                ])
+                ->post(self::API_ENDPOINT, $payload);
 
             Log::info('Gemini API Data Analysis Response', [
                 'status' => $response->status(),
