@@ -16,6 +16,7 @@ class Company extends Model
         'refresh_token',
         'expires_at',
         'is_active',
+        'bitrix_api_key',
     ];
 
     protected $casts = [

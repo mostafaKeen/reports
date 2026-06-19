@@ -745,5 +745,72 @@
             }
         });
     </script>
-</body>
+<!-- AI Chat Bot Modal -->
+<div id="ai-chat-modal" class="fixed inset-0 flex items-center justify-center bg-black bg-opacity-50 hidden">
+    <div class="bg-white dark:bg-gray-800 rounded-lg shadow-lg w-full max-w-md mx-4 p-4">
+        <div class="flex justify-between items-center mb-2">
+            <h2 class="text-xl font-semibold text-gray-800 dark:text-gray-200">CRM AI Assistant</h2>
+            <button type="button" onclick="document.getElementById('ai-chat-modal').classList.add('hidden')" class="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200">✕</button>
+        </div>
+        <div id="ai-chat-history" class="h-64 overflow-y-auto mb-2 p-2 border rounded bg-gray-50 dark:bg-gray-900">
+            <!-- Conversation will appear here -->
+        </div>
+        <form id="ai-chat-form" class="flex gap-2">
+            <textarea name="question" id="ai-question" rows="1" maxlength="1000" required class="flex-1 p-2 border rounded resize-none focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Ask a CRM question..."></textarea>
+            <button type="submit" class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 focus:outline-none">Send</button>
+        </form>
+    </div>
+</div>
+
+<!-- Trigger button -->
+<button type="button" onclick="document.getElementById('ai-chat-modal').classList.remove('hidden')" class="mt-4 px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 focus:outline-none">AI Chat</button>
+
+<script>
+    (function(){
+        const form = document.getElementById('ai-chat-form');
+        const historyEl = document.getElementById('ai-chat-history');
+        const csrf = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || CSRF_TOKEN;
+        function appendMessage(author, text){
+            const div = document.createElement('div');
+            div.className = author === 'user' ? 'text-right mb-2' : 'text-left mb-2';
+            const span = document.createElement('span');
+            span.className = author === 'user' ? 'inline-block bg-blue-500 text-white rounded px-3 py-1' : 'inline-block bg-gray-300 dark:bg-gray-700 text-gray-800 dark:text-gray-200 rounded px-3 py-1';
+            span.textContent = text;
+            div.appendChild(span);
+            historyEl.appendChild(div);
+            historyEl.scrollTop = historyEl.scrollHeight;
+        }
+        form.addEventListener('submit', async function(e){
+            e.preventDefault();
+            const question = document.getElementById('ai-question').value.trim();
+            if(!question) return;
+            appendMessage('user', question);
+            document.getElementById('ai-question').value='';
+            // loading placeholder
+            appendMessage('bot', '…');
+            try {
+                const res = await fetch('/crm-chat', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRF-TOKEN': csrf,
+                        'Accept': 'application/json'
+                    },
+                    body: JSON.stringify({question})
+                });
+                const data = await res.json();
+                // remove loading placeholder
+                historyEl.removeChild(historyEl.lastChild);
+                if(res.ok){
+                    appendMessage('bot', data.answer);
+                } else {
+                    appendMessage('bot', data.error || 'Error');
+                }
+            } catch(err){
+                historyEl.removeChild(historyEl.lastChild);
+                appendMessage('bot', 'Network error');
+            }
+        });
+    })();
+</script>
 </html>
