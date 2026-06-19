@@ -900,7 +900,6 @@
             
             const question = document.getElementById('ai-question').value.trim();
             if (!question) {
-                alert('Please ask a question');
                 return;
             }
 
@@ -932,16 +931,23 @@
                 // Hide loading indicator
                 document.getElementById('ai-chat-loading').classList.add('hidden');
 
+                // Handle non-JSON responses (e.g. HTML error pages)
+                const contentType = response.headers.get('content-type') || '';
+                if (!contentType.includes('application/json')) {
+                    throw new Error(`Server error (HTTP ${response.status}). Please try again.`);
+                }
+
                 const data = await response.json();
 
                 if (response.ok && data.success) {
                     appendMessage('bot', escapeHtml(data.answer));
                 } else {
-                    appendMessage('bot', `<strong>Error:</strong> ${escapeHtml(data.error || 'Failed to get response')}`);
+                    const errorMsg = data.error || `Request failed (HTTP ${response.status})`;
+                    appendMessage('bot', `<strong>Error:</strong> ${escapeHtml(errorMsg)}`);
                 }
             } catch (err) {
                 document.getElementById('ai-chat-loading').classList.add('hidden');
-                appendMessage('bot', `<strong>Error:</strong> ${escapeHtml(err.message || 'Network error')}`);
+                appendMessage('bot', `<strong>Error:</strong> ${escapeHtml(err.message || 'Network error. Please check your connection.')}`);
                 console.error('Chat error:', err);
             } finally {
                 isChatLoading = false;

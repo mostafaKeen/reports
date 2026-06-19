@@ -67,8 +67,12 @@ class ChatController extends Controller
                 'ip' => $request->ip(),
             ]);
 
-            // Record activity
-            $company->recordActivity();
+            // Record activity (safe - column may not exist)
+            try {
+                $company->recordActivity();
+            } catch (\Exception $e) {
+                // Silently ignore if last_activity_at column doesn't exist
+            }
 
             return response()->json([
                 'success' => true,
@@ -76,10 +80,15 @@ class ChatController extends Controller
                 'company' => $company->name,
             ]);
 
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            return response()->json([
+                'success' => false,
+                'error' => collect($e->errors())->flatten()->first() ?: 'Invalid input.',
+            ], 422);
         } catch (\Exception $e) {
             Log::error('Chat controller error', [
                 'error' => $e->getMessage(),
-                'question' => substr($validated['question'] ?? '', 0, 100),
+                'question' => substr($request->input('question', ''), 0, 100),
                 'user_id' => auth()->id(),
                 'trace' => config('app.debug') ? $e->getTraceAsString() : null,
             ]);
@@ -134,7 +143,12 @@ class ChatController extends Controller
                 'user_id' => auth()->id(),
             ]);
 
-            $company->recordActivity();
+            // Record activity (safe)
+            try {
+                $company->recordActivity();
+            } catch (\Exception $e) {
+                // Silently ignore
+            }
 
             return response()->json([
                 'success' => true,

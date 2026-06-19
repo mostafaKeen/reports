@@ -8,8 +8,8 @@ use Illuminate\Support\Facades\Http;
 class GeminiService
 {
     private $apiKey;
-    private const API_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent';
-    private const MODEL = 'gemini-pro';
+    private const API_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
+    private const MODEL = 'gemini-2.0-flash';
 
     public function __construct(string $apiKey)
     {
@@ -72,9 +72,7 @@ class GeminiService
             ];
 
             $response = Http::timeout(30)
-                ->post(self::API_ENDPOINT, array_merge($payload, [
-                    'key' => $this->apiKey
-                ]));
+                ->post(self::API_ENDPOINT . '?key=' . urlencode($this->apiKey), $payload);
 
             if (!$response->successful()) {
                 throw new \Exception('Gemini API request failed: ' . $response->status());
@@ -137,9 +135,7 @@ EOT;
             ];
 
             $response = Http::timeout(30)
-                ->post(self::API_ENDPOINT, array_merge($payload, [
-                    'key' => $this->apiKey
-                ]));
+                ->post(self::API_ENDPOINT . '?key=' . urlencode($this->apiKey), $payload);
 
             if (!$response->successful()) {
                 throw new \Exception('Gemini API request failed');

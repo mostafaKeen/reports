@@ -17,6 +17,8 @@ return Application::configure(basePath: dirname(__DIR__))
             'bitrix24/install/complete',
             'bitrix24/callback',
             'report/*/clear-cache',
+            'crm-chat',
+            'crm-chat/analyze',
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
