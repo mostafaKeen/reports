@@ -170,18 +170,31 @@ EOT;
             $contextParts[] = "You are assisting with company: {$context['company_name']}";
         }
 
+        if (!empty($context['lead_sources'])) {
+            $contextParts[] = "Lead Sources (Mapping of ID to Name):\n" . json_encode($context['lead_sources'], JSON_PRETTY_PRINT);
+        }
+
+        if (!empty($context['recent_leads'])) {
+            $contextParts[] = "Here are the most recent leads in the CRM (newest first):\n" . json_encode($context['recent_leads'], JSON_PRETTY_PRINT);
+        }
+
+        if (!empty($context['report_summary'])) {
+            $contextParts[] = "Here is the 30-day CRM performance summary:\n" . json_encode($context['report_summary'], JSON_PRETTY_PRINT);
+        }
+
         if (!empty($context['report_data'])) {
             $contextParts[] = "Here is the current report data context:\n" . json_encode($context['report_data'], JSON_PRETTY_PRINT);
         }
 
         $contextParts[] = "Guidelines:";
-        $contextParts[] = "- Answer questions about leads, activities, sales performance, and team metrics";
+        $contextParts[] = "- Answer questions about leads, activities, sales performance, and team metrics using the provided CRM context.";
+        $contextParts[] = "- When asked about the latest lead, look at the first item in the 'recent_leads' list and display its title, date, source name (mapped from lead_sources), and status.";
         $contextParts[] = "- Provide practical advice based on CRM data patterns";
         $contextParts[] = "- Keep responses concise and actionable";
-        $contextParts[] = "- If you don't know, say so clearly";
+        $contextParts[] = "- If you don't know or don't have data, say so clearly";
         $contextParts[] = "- Focus on helping improve sales operations";
 
-        return implode("\n", $contextParts);
+        return implode("\n\n", $contextParts);
     }
 
     /**

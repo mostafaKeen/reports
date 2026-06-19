@@ -7,6 +7,9 @@ use App\Services\GeminiService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 
+use App\Services\ReportService;
+use Carbon\Carbon;
+
 class ChatController extends Controller
 {
     /**
@@ -220,7 +223,51 @@ class ChatController extends Controller
             'timezone' => config('app.timezone', 'UTC'),
         ];
 
-        // Add report data if provided
+        try {
+            $reportService = new ReportService($company);
+            
+            // Fetch recent 30 days of leads and activities
+            $startDate = Carbon::now('Asia/Dubai')->subDays(30)->startOfDay()->format('Y-m-d H:i:s');
+            $endDate = Carbon::now('Asia/Dubai')->endOfDay()->format('Y-m-d H:i:s');
+
+            $leads = $reportService->fetchLeads($startDate, $endDate);
+            
+            // Sort leads descending by creation date to get latest leads first
+            usort($leads, function ($a, $b) {
+                return strcmp($b['DATE_CREATE'] ?? '', $a['DATE_CREATE'] ?? '');
+            });
+
+            // Compact the leads to save token space in context
+            $recentLeads = array_map(function ($lead) {
+                return [
+                    'id' => $lead['ID'] ?? null,
+                    'title' => $lead['TITLE'] ?? null,
+                    'date_create' => $lead['DATE_CREATE'] ?? null,
+                    'source' => $lead['SOURCE_ID'] ?? null,
+                    'status' => $lead['STATUS_ID'] ?? null,
+                    'assigned_by' => $lead['ASSIGNED_BY_ID'] ?? null,
+                ];
+            }, array_slice($leads, 0, 15));
+
+            $context['recent_leads'] = $recentLeads;
+
+            // Fetch lead sources mapping
+            $sources = $reportService->fetchLeadSources();
+            $context['lead_sources'] = $sources;
+
+            // Also get report summary
+            $reportSummary = $reportService->aggregateReport($startDate, $endDate);
+            unset($reportSummary['user_analytics']); // Remove user breakdown to fit token limit
+            $context['report_summary'] = $reportSummary;
+
+        } catch (\Exception $e) {
+            Log::warning('Failed to fetch Bitrix24 context for AI Chat', [
+                'company_id' => $company->id,
+                'error' => $e->getMessage()
+            ]);
+        }
+
+        // Add report data from request if provided
         if ($request->has('report_data')) {
             $reportData = $request->input('report_data');
             if (is_array($reportData) && !empty($reportData)) {
