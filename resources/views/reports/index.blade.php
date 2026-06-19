@@ -412,6 +412,7 @@
         let chartActivitiesType = null;
         let lastReportData = null;
         let isChatLoading = false;
+        let currentChatSessionId = null;
 
         // Color palette for charts
         const CHART_COLORS = [
@@ -924,7 +925,8 @@
                     },
                     body: JSON.stringify({
                         question: question,
-                        company_id: companyId
+                        company_id: companyId,
+                        session_id: currentChatSessionId
                     })
                 });
 
@@ -941,6 +943,9 @@
 
                 if (response.ok && data.success) {
                     appendMessage('bot', escapeHtml(data.answer));
+                    if (data.session_id) {
+                        currentChatSessionId = data.session_id;
+                    }
                 } else {
                     const errorMsg = data.error || `Request failed (HTTP ${response.status})`;
                     appendMessage('bot', `<strong>Error:</strong> ${escapeHtml(errorMsg)}`);

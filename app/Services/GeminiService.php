@@ -214,10 +214,19 @@ EOT;
             $contextParts[] = "Here is the current report data context:\n" . json_encode($context['report_data'], JSON_PRETTY_PRINT);
         }
 
+        if (!empty($context['chat_history'])) {
+            $historyPrompt = "Here is the previous chat conversation history for context:\n";
+            foreach ($context['chat_history'] as $msg) {
+                $roleName = $msg['role'] === 'user' ? 'User' : 'Assistant';
+                $historyPrompt .= "- {$roleName}: {$msg['content']}\n";
+            }
+            $contextParts[] = $historyPrompt;
+        }
+
         $contextParts[] = "Guidelines:";
         $contextParts[] = "- Answer questions about leads, activities, sales performance, and team metrics using the provided CRM context.";
         $contextParts[] = "- When asked about the latest lead, look at the first item in the 'recent_leads' list and display its title, date, source name (mapped from lead_sources), and status.";
-        $contextParts[] = "- Provide practical advice based on CRM data patterns";
+        $contextParts[] = "- CRITICAL: Do NOT use any markdown characters, stars, or asterisks (such as **bold** or *italic* or starting list items with * or -). Write strictly in clear, plain text. For bolding, capitalize words if necessary but do not use markdown syntax. Use normal newlines for bullet points.";
         $contextParts[] = "- Keep responses concise and actionable";
         $contextParts[] = "- If you don't know or don't have data, say so clearly";
         $contextParts[] = "- Focus on helping improve sales operations";

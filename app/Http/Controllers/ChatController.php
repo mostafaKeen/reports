@@ -8,6 +8,8 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 
 use App\Services\ReportService;
+use App\Services\BitrixClient;
+use App\Models\AiChatSession;
 use Carbon\Carbon;
 
 class ChatController extends Controller
@@ -28,6 +30,7 @@ class ChatController extends Controller
             $validated = $request->validate([
                 'question' => 'required|string|max:2000|min:3',
                 'company_id' => 'nullable|integer|exists:companies,id',
+                'session_id' => 'nullable|integer|exists:ai_chat_sessions,id',
             ]);
 
             // Get company context
@@ -48,17 +51,46 @@ class ChatController extends Controller
                 ], 400);
             }
 
+            // Retrieve or create chat session in database for history saving
+            $sessionKey = "ai_chat_session_id_{$company->id}";
+            $sessionId = $request->input('session_id') ?: session($sessionKey);
+
+            $chatSession = null;
+            if ($sessionId) {
+                $chatSession = AiChatSession::find($sessionId);
+            }
+
+            if (!$chatSession) {
+                $chatSession = AiChatSession::create([
+                    'company_id' => $company->id,
+                    'user_id' => auth()->id(),
+                    'history' => [],
+                ]);
+                session([$sessionKey => $chatSession->id]);
+            }
+
+            $history = $chatSession->history ?: [];
+
             // Get the Gemini service
             $gemini = new GeminiService($company->bitrix_api_key);
 
             // Build context for better responses
             $context = $this->buildContext($company, $request);
+            $context['chat_history'] = $history; // Add chat history to Gemini context
 
             // Generate response
             $answer = $gemini->generateResponse(
                 trim($validated['question']),
                 $context
             );
+
+            // Append user question and assistant answer to history
+            $history[] = ['role' => 'user', 'content' => trim($validated['question'])];
+            $history[] = ['role' => 'model', 'content' => $answer];
+            
+            $chatSession->update([
+                'history' => $history
+            ]);
 
             // Log interaction
             Log::info('CRM Chat - Message processed', [
@@ -81,6 +113,7 @@ class ChatController extends Controller
                 'success' => true,
                 'answer' => $answer,
                 'company' => $company->name,
+                'session_id' => $chatSession->id,
             ]);
 
         } catch (\Illuminate\Validation\ValidationException $e) {
@@ -224,18 +257,15 @@ class ChatController extends Controller
         ];
 
         try {
-            $reportService = new ReportService($company);
-            
-            // Fetch recent 30 days of leads and activities
-            $startDate = Carbon::now('Asia/Dubai')->subDays(30)->startOfDay()->format('Y-m-d H:i:s');
-            $endDate = Carbon::now('Asia/Dubai')->endOfDay()->format('Y-m-d H:i:s');
+            $bitrixClient = new BitrixClient($company);
 
-            $leads = $reportService->fetchLeads($startDate, $endDate);
-            
-            // Sort leads descending by creation date to get latest leads first
-            usort($leads, function ($a, $b) {
-                return strcmp($b['DATE_CREATE'] ?? '', $a['DATE_CREATE'] ?? '');
-            });
+            // Fetch the 15 latest leads (takes exactly 1 fast REST call instead of pagination!)
+            $response = $bitrixClient->call('crm.lead.list', [
+                'select' => ['ID', 'TITLE', 'DATE_CREATE', 'SOURCE_ID', 'STATUS_ID', 'ASSIGNED_BY_ID'],
+                'order' => ['DATE_CREATE' => 'DESC'],
+                'start' => 0,
+            ]);
+            $rawLeads = $response['result'] ?? [];
 
             // Compact the leads to save token space in context
             $recentLeads = array_map(function ($lead) {
@@ -247,18 +277,21 @@ class ChatController extends Controller
                     'status' => $lead['STATUS_ID'] ?? null,
                     'assigned_by' => $lead['ASSIGNED_BY_ID'] ?? null,
                 ];
-            }, array_slice($leads, 0, 15));
+            }, array_slice($rawLeads, 0, 15));
 
             $context['recent_leads'] = $recentLeads;
 
-            // Fetch lead sources mapping
+            // Fetch lead sources mapping (uses Redis caching internally in ReportService, super fast)
+            $reportService = new ReportService($company);
             $sources = $reportService->fetchLeadSources();
             $context['lead_sources'] = $sources;
 
-            // Also get report summary
-            $reportSummary = $reportService->aggregateReport($startDate, $endDate);
-            unset($reportSummary['user_analytics']); // Remove user breakdown to fit token limit
-            $context['report_summary'] = $reportSummary;
+            // Retrieve the pre-saved/cached report summary from Laravel cache (instant, no API calls)
+            $reportSummary = cache("company:{$company->id}:latest_report_summary");
+            if ($reportSummary) {
+                unset($reportSummary['user_analytics']); // Remove user breakdown to fit token limit
+                $context['report_summary'] = $reportSummary;
+            }
 
         } catch (\Exception $e) {
             Log::warning('Failed to fetch Bitrix24 context for AI Chat', [

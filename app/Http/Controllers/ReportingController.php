@@ -164,6 +164,13 @@ class ReportingController extends Controller
                 "report_time:{$company->id}:{$startDate}:{$endDate}" => now(),
             ]);
 
+            // Cache the latest report summary for the AI chatbot (expires in 24 hours)
+            try {
+                cache(["company:{$company->id}:latest_report_summary" => $report], now()->addHours(24));
+            } catch (\Exception $e) {
+                Log::warning('Failed to cache latest report summary for AI chatbot', ['error' => $e->getMessage()]);
+            }
+
             Log::info('Report data fetched successfully', [
                 'company_id' => $company->id,
                 'total_leads' => $report['total_leads'] ?? 0,
