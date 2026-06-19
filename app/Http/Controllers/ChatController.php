@@ -278,12 +278,13 @@ class ChatController extends Controller
         return $context;
     }
 
-    /**
-     * Get user-friendly error message
-     */
     private function getErrorMessage(\Exception $e): string
     {
         $message = $e->getMessage();
+
+        if (strpos($message, '429') !== false) {
+            return 'AI rate limit exceeded (429). Google free-tier API keys are limited to 15 requests per minute. Please wait a moment before trying again, or upgrade to a pay-as-you-go key in your company settings.';
+        }
 
         // Hide technical details in production
         if (!config('app.debug')) {

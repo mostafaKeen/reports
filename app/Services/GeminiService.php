@@ -71,11 +71,22 @@ class GeminiService
                 ]
             ];
 
+            Log::info('Gemini API Request', [
+                'endpoint' => self::API_ENDPOINT . '?key=***' . substr($this->apiKey, -5),
+                'payload' => $payload,
+            ]);
+
             $response = Http::timeout(30)
                 ->post(self::API_ENDPOINT . '?key=' . urlencode($this->apiKey), $payload);
 
+            Log::info('Gemini API Response', [
+                'status' => $response->status(),
+                'headers' => $response->headers(),
+                'body' => $response->body(),
+            ]);
+
             if (!$response->successful()) {
-                throw new \Exception('Gemini API request failed: ' . $response->status());
+                throw new \Exception('Gemini API request failed: ' . $response->status() . ' - ' . $response->body());
             }
 
             $result = $response->json();
@@ -134,11 +145,22 @@ EOT;
                 ]
             ];
 
+            Log::info('Gemini API Data Analysis Request', [
+                'endpoint' => self::API_ENDPOINT . '?key=***' . substr($this->apiKey, -5),
+                'payload' => $payload,
+            ]);
+
             $response = Http::timeout(30)
                 ->post(self::API_ENDPOINT . '?key=' . urlencode($this->apiKey), $payload);
 
+            Log::info('Gemini API Data Analysis Response', [
+                'status' => $response->status(),
+                'headers' => $response->headers(),
+                'body' => $response->body(),
+            ]);
+
             if (!$response->successful()) {
-                throw new \Exception('Gemini API request failed');
+                throw new \Exception('Gemini API request failed: ' . $response->status() . ' - ' . $response->body());
             }
 
             $result = $response->json();
